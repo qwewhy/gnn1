@@ -1,0 +1,102 @@
+# 改进的四边形化模式检索框架配置文件
+
+data:
+  root: "data"  # 数据根目录
+
+  # 训练和验证使用的3D模型（支持多个）
+  train_meshes:
+    - "model/new/artist3-ear-newui.obj"
+    - "model/octopus-retopo.obj"
+    - "model/old/artist1-torso-oldui.obj"
+
+  val_meshes:
+    - "model/new/artist1-torso-newui.obj"
+    - "model/old-man-head-retopo.obj"
+
+model:
+  # 输入特征维度
+  anchor_in_channels: 8    # 6维拓扑 + 2维几何特征
+  pattern_in_channels: 8   # 6维拓扑 + 2维曲率特征
+
+  # 网络架构参数
+  hidden_channels: 128     # 隐藏层维度
+  out_channels: 128        # 输出嵌入维度
+  num_heads: 4            # GAT注意力头数
+  edge_dim: 3             # 边特征维度
+  dropout: 0.2            # Dropout比率
+
+training:
+  # 基本训练参数
+  epochs: 100             # 训练轮数
+  batch_size: 16          # 批次大小（减小以避免内存问题）
+  learning_rate: 0.001    # 初始学习率
+  weight_decay: 0.01      # 权重衰减（AdamW）
+
+  # 三元组损失参数
+  margin: 0.5             # 三元组边界
+  num_triplets_train: 1000  # 每轮训练三元组数
+  num_triplets_val: 200     # 每轮验证三元组数
+
+  # 训练策略
+  gradient_clip: 1.0      # 梯度裁剪
+  patience: 10            # 早停耐心值
+
+  # 正则化
+  use_l2_reg: true        # 是否使用L2正则化
+  l2_reg_weight: 0.00001  # L2正则化权重（修正：从1e-5改为0.00001，确保兼容性）
+
+  # 检查点
+  checkpoint_dir: "src/train/training/checkpoints/improved_gat"
+
+  # 日志
+  use_wandb: false        # 是否使用Weights & Biases
+  log_interval: 10        # 日志记录间隔
+
+evaluation:
+  # 检索评估
+  k_values: [1, 5, 10, 20]  # Recall@K的K值
+  num_test_queries: 100      # 测试查询数
+
+  # 可视化
+  visualize_attention: true   # 是否可视化注意力权重
+  save_embeddings: true      # 是否保存嵌入向量
+
+inference:
+  # 推理设置 - 修正：保持与代码一致的路径
+  device: "auto"            # 推理设备
+  use_faiss: false          # 是否使用FAISS加速（需要安装）
+
+# 数据增强设置（用于populate_db.py）
+augmentation:
+  # 几何变换
+  rotation_range: [0, 6.28]  # 旋转范围（弧度）
+  scale_range: [0.95, 1.05]  # 缩放范围
+  noise_std: 0.001          # 顶点噪声标准差
+
+  # 拓扑参数
+  min_patch_faces: 10       # 最小面片大小
+  max_patch_faces: 30       # 最大面片大小
+  patches_per_model: 100    # 每个模型提取的面片数
+
+# 特征工程设置
+features:
+  # 节点特征
+  use_valence: true         # 使用节点度数
+  use_boundary: true        # 使用边界标记
+  use_corner: true          # 使用角点标记
+  use_distance_to_singular: true  # 使用到奇异点的距离
+  use_local_config: true    # 使用局部拓扑配置
+  use_boundary_position: true  # 使用边界位置编码
+
+  # 几何特征（仅锚点）
+  use_curvature: true       # 使用曲率
+  use_length_ratio: true    # 使用长度比
+
+  # 边特征
+  use_edge_length: true     # 使用边长度
+  use_edge_curvature: true  # 使用边曲率
+  use_boundary_edge: true   # 使用边界边标记
+
+  # 图级别特征
+  use_graph_features: true  # 使用全局特征
+  graph_features: ["complexity_score", "avg_curvature", "curvature_variance", "area"]
