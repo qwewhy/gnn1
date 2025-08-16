@@ -1,0 +1,118 @@
+{
+  "app": {
+    "title": "3D Mesh Patch Visualization Query System",
+    "subtitle": "Deep Learning-Based Geometric Patch Similarity Retrieval"
+  },
+  "navigation": {
+    "language": "Language",
+    "chinese": "中文",
+    "english": "English"
+  },
+  "status": {
+    "apiConnected": "API Connected",
+    "apiDisconnected": "API Disconnected",
+    "serviceHealthy": "Service Healthy",
+    "serviceUnhealthy": "Components Not Fully Initialized",
+    "loading": "Loading...",
+    "querying": "Querying...",
+    "generating": "Generating 3D Visualization...",
+    "retry": "Retry"
+  },
+  "stats": {
+    "totalPatches": "Total Dataset Patches",
+    "availableMeshes": "Available Mesh Files",
+    "databaseFields": "Database Fields",
+    "queryResults": "Query Results"
+  },
+  "query": {
+    "title": "Query Control Panel",
+    "selectMesh": "Select Mesh File",
+    "selectMeshPlaceholder": "Please select mesh file...",
+    "executeQuery": "Execute Query",
+    "randomQuery": "Random Query",
+    "hint": "Tip: Select a mesh file and click \"Execute Query\" to find similar patches, or use \"Random Query\" to view random patches from the dataset"
+  },
+  "results": {
+    "title": "Query Results",
+    "noResults": "No Query Results",
+    "noResultsHint": "Please select a mesh file and execute query first",
+    "loading": "Querying, please wait...",
+    "rank": "Rank",
+    "patternId": "Pattern ID",
+    "sides": "Sides",
+    "sourceObject": "Source Object",
+    "quality": "Quality",
+    "similarity": "Similarity",
+    "actions": "Actions",
+    "view": "View",
+    "statistics": "Found {{count}} similar patches, High similarity (>90%): {{high}}, Medium similarity (70-90%): {{medium}}"
+  },
+  "visualization": {
+    "title": "Patch Visualization",
+    "dbIndex": "DB Index: {{index}}",
+    "close": "Close",
+    "queryPatch": "Query Patch",
+    "fromMesh": "from {{meshName}}",
+    "similarPatch": "Similar Patch",
+    "loadingFailed": "Visualization Loading Failed",
+    "queryLoadingFailed": "Query Patch Visualization Loading Failed",
+    "loading": "Generating 3D Visualization...",
+    "loadingTime": "This may take a few seconds",
+    "patchInfo": "Patch Details",
+    "queryPatchInfo": "Query Patch Information"
+  },
+  "patchInfo": {
+    "basicInfo": "Basic Information",
+    "topologyInfo": "Topology Information",
+    "geometryInfo": "Geometry Information",
+    "curvatureInfo": "Curvature Information",
+    "geometryStats": "Geometry Data Statistics",
+    "patternId": "Pattern ID",
+    "sides": "Sides",
+    "sourceObj": "Source Object",
+    "quality": "Quality",
+    "qualityNew": "New",
+    "qualityOld": "Old",
+    "edgebreakerEncoding": "Edgebreaker Encoding",
+    "canonicalForm": "Canonical Form",
+    "numVertices": "Vertices",
+    "numFaces": "Faces",
+    "area": "Area",
+    "complexityScore": "Complexity Score",
+    "totalBoundaryLength": "Total Boundary Length",
+    "avgCurvature": "Average Curvature",
+    "curvatureVariance": "Curvature Variance",
+    "unknown": "unknown",
+    "notAvailable": "N/A",
+    "count": "{{count}} items"
+  },
+  "messages": {
+    "selectMeshFirst": "Please select a mesh file first",
+    "querySuccess": "Query successful! Found {{count}} similar patches",
+    "queryFailed": "Query failed: {{error}}",
+    "loadMeshFailed": "Failed to load mesh files: {{error}}",
+    "loadStatsFailed": "Failed to load statistics",
+    "apiConnectionFailed": "Unable to connect to backend API service, please ensure backend service is started (http://localhost:8000)",
+    "randomQueryGetting": "Getting random query sample...",
+    "randomQuerySuccess": "Randomly selected patch ID: {{patternId}}",
+    "randomQueryFailed": "Random query failed: {{error}}",
+    "apiConnected": "API connection normal",
+    "statsLoaded": "Statistics loaded successfully",
+    "meshesLoaded": "Loaded {{count}} mesh files",
+    "queryStarted": "Starting query: {{mesh}}",
+    "queryCompleted": "Query completed, found {{count}} results",
+    "queryPatchInfo": "Query patch info:",
+    "visualizationOpened": "Opening visualization: DB index {{dbIndex}}",
+    "visualizationLoaded": "Visualization data loaded successfully",
+    "queryVisualizationLoaded": "Query patch visualization data loaded successfully",
+    "visualizationLoadFailed": "Visualization loading failed:",
+    "queryVisualizationLoadFailed": "Query patch visualization loading failed:"
+  },
+  "buttons": {
+    "close": "Close",
+    "retry": "Retry",
+    "execute": "Execute",
+    "random": "Random",
+    "view": "View"
+  }
+}

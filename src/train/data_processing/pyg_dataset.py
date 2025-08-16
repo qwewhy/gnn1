@@ -8,6 +8,8 @@ from pathlib import Path
 import tqdm
 import json
 
+# 使用集中的路径管理器
+from src.common.path_manager import path_manager
 from src.train.data_processing.proper_decoder import ProperPatternParser
 
 
@@ -17,20 +19,31 @@ class PatchDataset(InMemoryDataset):
     Enhanced PyTorch Geometric dataset with geometric features support
     """
 
-    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None):
-        self.db_path = Path(root) / 'raw' / 'patches.db'
+    def __init__(self, root=None, transform=None, pre_transform=None, pre_filter=None):
+        # 如果没有指定root，使用默认的数据目录
+        if root is None:
+            root = str(path_manager.data_dir)
+        
+        self.db_path = path_manager.database_path
         super().__init__(root, transform, pre_transform, pre_filter)
-        self.data, self.slices = torch.load(self.processed_paths[0])
+        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
 
     @property
     def raw_file_names(self):
-        return ['patches.db']
+        # 指向原始数据库文件
+        return [path_manager.database_path.name]
+
+    @property
+    def raw_dir(self):
+        # 明确指定原始文件目录
+        return str(path_manager.data_raw_dir)
 
     @property
     def processed_file_names(self):
         return ['pyg_patch_dataset_with_geometry.pt']
 
     def download(self):
+        # 不需要下载，因为文件是本地生成的
         pass
 
     def process(self):
@@ -38,7 +51,7 @@ class PatchDataset(InMemoryDataset):
         处理数据库，构建包含几何特征的PyG数据对象
         """
         if not self.db_path.exists():
-            raise FileNotFoundError(f"Database not found at {self.db_path}")
+            raise FileNotFoundError(f"数据库未找到，请先运行populate_db.py: {self.db_path}")
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -119,7 +132,6 @@ class PatchDataset(InMemoryDataset):
             is_boundary_edge = graph_data["is_boundary_edge"].float().view(-1, 1)
 
             if has_geometry and num_edges > 0:
-                # 简化处理：假设边界边的几何特征可以映射到所有边
                 edge_length_features = torch.zeros(num_edges, 1)
                 edge_curv_features = torch.zeros(num_edges, 1)
 
@@ -133,7 +145,6 @@ class PatchDataset(InMemoryDataset):
 
                 edge_attr = torch.cat([is_boundary_edge, edge_length_features, edge_curv_features], dim=1)
             else:
-                # 如果没有几何信息，用0填充长度和曲率
                 padding = torch.zeros(num_edges, 2)
                 edge_attr = torch.cat([is_boundary_edge, padding], dim=1)
 

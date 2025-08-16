@@ -1,0 +1,14 @@
+# FastAPI and related dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+requests==2.31.0
+
+# Existing project dependencies (if not already installed)
+torch
+torch-geometric
+numpy
+trimesh
+plotly
+PyYAML

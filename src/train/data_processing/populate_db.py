@@ -1,13 +1,7 @@
-import sys
-from pathlib import Path
-
-# 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 # File: src/train/data_processing/populate_db.py
 # 数据库填充模块 / Database population module
 
+import sys
 import sqlite3
 import trimesh
 import numpy as np
@@ -16,15 +10,25 @@ from typing import List, Optional, Tuple, Dict
 import tqdm
 import json
 import importlib.util
+from pathlib import Path
+
+# 添加项目路径管理
+try:
+    from src.common.path_manager import setup_project_environment, get_database_path
+    path_manager = setup_project_environment()
+except ImportError:
+    # 如果无法导入，使用fallback方法
+    project_root_fallback = Path(__file__).parent.parent.parent.parent
+    sys.path.insert(0, str(project_root_fallback / 'src'))
+    from src.common.path_manager import setup_project_environment, get_database_path
+    path_manager = setup_project_environment()
 
 
 # 导入ProperPatternEncoder
 def _load_encoder():
     """直接从模块文件加载ProperPatternEncoder"""
-    spec = importlib.util.spec_from_file_location(
-        "proper_encoder",
-        Path(__file__).parent / "proper_encoder.py"
-    )
+    encoder_path = Path(__file__).parent / "proper_encoder.py"
+    spec = importlib.util.spec_from_file_location("proper_encoder", encoder_path)
     proper_encoder_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(proper_encoder_module)
     return proper_encoder_module.ProperPatternEncoder
@@ -42,8 +46,7 @@ def setup_database(db_path: Path) -> sqlite3.Connection:
         print(f"找到旧数据库 {db_path}，正在删除...")
         db_path.unlink()
 
-    if not db_path.parent.exists():
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -52,73 +55,31 @@ def setup_database(db_path: Path) -> sqlite3.Connection:
     cursor.execute("""
                    CREATE TABLE IF NOT EXISTS patterns
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
                        -- 拓扑信息
-                       edgebreaker_encoding
-                       TEXT
-                       NOT
-                       NULL,
-                       canonical_form
-                       TEXT
-                       NOT
-                       NULL,
-                       sides
-                       INTEGER
-                       NOT
-                       NULL,
+                       edgebreaker_encoding TEXT NOT NULL,
+                       canonical_form TEXT NOT NULL,
+                       sides INTEGER NOT NULL,
                        -- 基本元数据
-                       complexity_score
-                       REAL
-                       DEFAULT
-                       0.0,
-                       num_vertices
-                       INTEGER
-                       DEFAULT
-                       0,
-                       num_faces
-                       INTEGER
-                       DEFAULT
-                       0,
-                       source_obj
-                       TEXT
-                       NOT
-                       NULL,
-                       quality
-                       TEXT
-                       NOT
-                       NULL,
+                       complexity_score REAL DEFAULT 0.0,
+                       num_vertices INTEGER DEFAULT 0,
+                       num_faces INTEGER DEFAULT 0,
+                       source_obj TEXT NOT NULL,
+                       quality TEXT NOT NULL,
                        -- 几何特征（JSON格式存储）
-                       boundary_vertices
-                       TEXT, -- 边界顶点坐标 [[x,y,z], ...]
-                       vertex_normals
-                       TEXT, -- 顶点法线 [[nx,ny,nz], ...]
-                       mean_curvatures
-                       TEXT, -- 平均曲率 [c1, c2, ...]
-                       gaussian_curvatures
-                       TEXT, -- 高斯曲率 [g1, g2, ...]
-                       edge_lengths
-                       TEXT, -- 边长度 [l1, l2, ...]
-                       edge_curvatures
-                       TEXT, -- 边曲率 [ec1, ec2, ...]
+                       boundary_vertices TEXT, -- 边界顶点坐标 [[x,y,z], ...]
+                       vertex_normals TEXT, -- 顶点法线 [[nx,ny,nz], ...]
+                       mean_curvatures TEXT, -- 平均曲率 [c1, c2, ...]
+                       gaussian_curvatures TEXT, -- 高斯曲率 [g1, g2, ...]
+                       edge_lengths TEXT, -- 边长度 [l1, l2, ...]
+                       edge_curvatures TEXT, -- 边曲率 [ec1, ec2, ...]
                        -- 额外的统计信息
-                       avg_curvature
-                       REAL, -- 平均曲率均值
-                       curvature_variance
-                       REAL, -- 曲率方差
-                       total_boundary_length
-                       REAL, -- 边界总长度
-                       area
-                       REAL, -- 面片面积
-                       UNIQUE
-                   (
-                       canonical_form,
-                       sides
-                   )
-                       );
+                       avg_curvature REAL, -- 平均曲率均值
+                       curvature_variance REAL, -- 曲率方差
+                       total_boundary_length REAL, -- 边界总长度
+                       area REAL, -- 面片面积
+                       UNIQUE(canonical_form, sides)
+                   );
                    """)
 
     conn.commit()
@@ -177,21 +138,17 @@ def extract_geometric_features(mesh: trimesh.Trimesh, patch_face_indices: List[i
         vertex_normals = mesh.vertex_normals[boundary_vertex_indices].tolist()
 
         # 3. 计算顶点曲率
-        # 计算平均曲率
         mean_curvatures = []
         gaussian_curvatures = []
 
-        # 使用trimesh的曲率计算功能
         radius = mesh.scale / 50.0  # 自适应半径
 
         for vertex_idx in boundary_vertex_indices:
-            # 计算平均曲率
             mean_curv = trimesh.curvature.discrete_mean_curvature_measure(
                 mesh, mesh.vertices[[vertex_idx]], radius
             )[0]
             mean_curvatures.append(float(mean_curv))
 
-            # 计算高斯曲率
             gaussian_curv = trimesh.curvature.discrete_gaussian_curvature_measure(
                 mesh, mesh.vertices[[vertex_idx]], radius
             )[0]
@@ -206,11 +163,9 @@ def extract_geometric_features(mesh: trimesh.Trimesh, patch_face_indices: List[i
             v1_idx = boundary_vertex_indices[i]
             v2_idx = boundary_vertex_indices[(i + 1) % num_boundary_vertices]
 
-            # 边长度
             edge_length = np.linalg.norm(mesh.vertices[v2_idx] - mesh.vertices[v1_idx])
             edge_lengths.append(float(edge_length))
 
-            # 边曲率（两个端点曲率的平均）
             edge_curv = (mean_curvatures[i] + mean_curvatures[(i + 1) % num_boundary_vertices]) / 2
             edge_curvatures.append(float(edge_curv))
 
@@ -223,7 +178,6 @@ def extract_geometric_features(mesh: trimesh.Trimesh, patch_face_indices: List[i
         patch_faces = mesh.faces[patch_face_indices]
         area = 0.0
         for face in patch_faces:
-            # 计算三角形面积（假设是三角网格）
             v0, v1, v2 = mesh.vertices[face]
             area += 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0))
 
@@ -251,7 +205,6 @@ def encode_patch_to_pattern(mesh: trimesh.Trimesh, patch_face_indices: List[int]
     编码几何面片，同时提取拓扑和几何特征
     """
     try:
-        # 1. 使用多弦折叠算法编码拓扑
         encoder = ProperPatternEncoder()
         encoding_result = encoder.encode_patch_to_pattern(mesh, patch_face_indices)
 
@@ -259,11 +212,8 @@ def encode_patch_to_pattern(mesh: trimesh.Trimesh, patch_face_indices: List[int]
             return None
 
         edgebreaker_encoding, num_sides = encoding_result
-
-        # 2. 生成规范形式（用于去重）
         canonical_form = edgebreaker_encoding.strip()
 
-        # 3. 计算拓扑元数据
         patch_faces = mesh.faces[patch_face_indices]
         unique_vertices = np.unique(patch_faces)
         num_faces = len(patch_faces)
@@ -276,7 +226,6 @@ def encode_patch_to_pattern(mesh: trimesh.Trimesh, patch_face_indices: List[int]
             'num_faces': num_faces
         }
 
-        # 4. 提取几何特征
         geometric_features = extract_geometric_features(mesh, patch_face_indices)
 
         if geometric_features is None:
@@ -293,62 +242,48 @@ def main():
     """
     处理所有.obj文件并填充数据库
     """
-    # 设置路径
-    model_dir = project_root / "model"
-    db_path = project_root / "data" / "raw" / "patches.db"
+    # 使用统一的路径管理
+    db_path = get_database_path()
+    model_dir = path_manager.model_dir
     patches_per_model = 100
 
-    print(f"设置数据库... (Setting up database at {db_path})")
+    print(f"🗄️ 设置数据库: {db_path}")
+    print(f"📁 模型目录: {model_dir}")
+    
     conn = setup_database(db_path)
     cursor = conn.cursor()
 
-    print(f"检查模型目录: {model_dir}")
-    print(f"模型目录存在: {model_dir.exists()}")
-
-    # 查找所有.obj文件
     obj_files = list(model_dir.glob("**/*.obj"))
     print(f"找到 {len(obj_files)} 个模型文件")
 
-    # 显示找到的文件
-    for i, obj_file in enumerate(obj_files[:5]):  # 只显示前5个
-        print(f"  {i + 1}: {obj_file.relative_to(model_dir)}")
-
-    # 处理每个模型文件
     for obj_path in tqdm.tqdm(obj_files, desc="处理模型"):
-        # 确定质量标签
         quality = obj_path.parent.name
         if quality not in ['new', 'old']:
             tqdm.tqdm.write(f"跳过非预期目录中的文件: {obj_path}")
             continue
 
         try:
-            # 加载网格
             mesh = trimesh.load(obj_path, process=True)
             if not isinstance(mesh, trimesh.Trimesh):
                 tqdm.tqdm.write(f"跳过非Trimesh对象: {obj_path.name}")
                 continue
 
-            # 预处理网格
             mesh.merge_vertices()
             mesh.remove_degenerate_faces()
             mesh.remove_duplicate_faces()
 
-            # 构建面邻接图
             face_adjacency_graph = nx.from_edgelist(mesh.face_adjacency)
 
         except Exception as e:
             tqdm.tqdm.write(f"加载失败 {obj_path.name}: {e}")
             continue
 
-        # 从每个模型提取多个面片
         successful_patches = 0
         for _ in range(patches_per_model):
-            # 提取随机面片
             patch_indices = extract_random_patch(mesh, face_adjacency_graph)
             if not patch_indices:
                 continue
 
-            # 编码面片并提取特征
             encoding_result = encode_patch_to_pattern(mesh, patch_indices)
             if not encoding_result:
                 continue
@@ -356,7 +291,6 @@ def main():
             edgebreaker_encoding, canonical_form, sides, topology_metadata, geometric_features = encoding_result
 
             try:
-                # 将几何特征转换为JSON字符串
                 cursor.execute("""
                                INSERT INTO patterns (edgebreaker_encoding, canonical_form, sides,
                                                      complexity_score, num_vertices, num_faces,
@@ -388,7 +322,6 @@ def main():
                 successful_patches += 1
 
             except sqlite3.IntegrityError:
-                # 规范形式已存在，跳过
                 pass
             except Exception as e:
                 tqdm.tqdm.write(f"插入失败 for {obj_path.name}: {e}")
@@ -398,13 +331,10 @@ def main():
 
     conn.commit()
 
-    # 显示数据库统计信息
     cursor.execute("SELECT COUNT(*) FROM patterns")
     total_patterns = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM patterns WHERE quality='new'")
     new_patterns = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM patterns WHERE quality='old'")
     old_patterns = cursor.fetchone()[0]
 

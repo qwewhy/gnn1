@@ -1,0 +1,245 @@
+# 高级训练系统配置文件 / Advanced training system configuration
+# File: configs/advanced_training_config.yaml
+
+# 基本训练配置 / Basic training configuration
+training:
+  epochs: 100
+  batch_size: 32
+  patience: 15
+  gradient_clip: 1.0
+  log_interval: 50
+  checkpoint_dir: 'src/train/training/checkpoints/advanced'
+  
+  # 训练策略选择 / Training strategy selection
+  use_hard_mining: true         # 启用硬三元组挖掘
+  use_advanced_system: true     # 使用高级多任务系统
+  use_multi_task_learning: true # 启用多任务学习
+  
+  # 基础配置兼容性 / Basic configuration compatibility
+  learning_rate: 0.001
+  weight_decay: 0.01
+  margin: 0.5
+  num_triplets_train: 2000
+  num_triplets_val: 400
+
+# 模型配置 / Model configuration  
+model:
+  # 基础编码器配置 / Base encoder configuration
+  anchor_in_channels: 8
+  pattern_in_channels: 8
+  hidden_channels: 64
+  out_channels: 128
+  num_heads: 4
+  edge_dim: 3
+  dropout: 0.2
+  
+  # 多任务头配置 / Multi-task head configuration
+  task_heads:
+    binary_tasks: ['topology_binary', 'distortion_binary', 'valence_binary', 'boundary_binary']
+    regression_tasks: ['topology_regression', 'geometric_regression', 'regularity_regression', 'overall_regression']
+    classification_tasks: ['quality_tier', 'singularity_type', 'boundary_type']
+
+# 硬三元组挖掘配置 / Hard triplet mining configuration
+mining:
+  enabled: true
+  mining_type: 'adaptive'  # 'hard', 'semi_hard', 'adaptive'
+  margin: 0.5
+  squared: false
+  candidate_multiplier: 3
+  
+  # 自适应挖掘比例 / Adaptive mining ratios
+  hard_ratio: 0.3
+  semi_hard_ratio: 0.5
+  easy_ratio: 0.2
+  
+  # 统计和日志 / Statistics and logging
+  enable_statistics: true
+  log_mining_details: false
+
+# 多任务损失权重配置 / Multi-task loss weights configuration
+loss_weights:
+  # 主要任务 / Primary tasks
+  triplet: 1.0
+  overall_regression: 0.5
+  quality_tier: 0.3
+  
+  # 二元分类任务 / Binary classification tasks
+  topology_binary: 0.3
+  distortion_binary: 0.3
+  valence_binary: 0.2
+  boundary_binary: 0.2
+  
+  # 回归任务 / Regression tasks
+  topology_regression: 0.4
+  geometric_regression: 0.4
+  regularity_regression: 0.3
+  
+  # 多类分类任务 / Multi-class classification tasks
+  singularity_type: 0.2
+  boundary_type: 0.2
+  
+  # 自适应权重 / Adaptive weights
+  use_adaptive_weights: false
+
+# 优化器配置 / Optimizer configuration
+optimizer:
+  type: 'AdamW'  # 'AdamW', 'Adam', 'SGD'
+  lr: 0.001
+  weight_decay: 0.01
+  
+  # AdamW特定参数 / AdamW specific parameters
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  
+  # SGD特定参数 / SGD specific parameters (if used)
+  momentum: 0.9
+  nesterov: true
+
+# 学习率调度器配置 / Learning rate scheduler configuration
+scheduler:
+  type: 'CosineAnnealingLR'  # 'CosineAnnealingLR', 'StepLR', 'ReduceLROnPlateau'
+  
+  # CosineAnnealingLR参数 / CosineAnnealingLR parameters
+  eta_min: 1e-6
+  
+  # StepLR参数 / StepLR parameters
+  step_size: 30
+  gamma: 0.1
+  
+  # ReduceLROnPlateau参数 / ReduceLROnPlateau parameters
+  factor: 0.5
+  patience: 5
+  threshold: 1e-4
+
+# 数据配置 / Data configuration
+data:
+  root: 'data/processed'
+  
+  # 训练网格文件 / Training mesh files
+  train_meshes:
+    - 'model/stanford-bunny-retopo.obj'
+    - 'model/bull-retopo.obj'
+    - 'model/octopus-retopo.obj'
+    - 'model/new/artist1-torso-newui.obj'
+    - 'model/new/artist2-hand-newui.obj'
+  
+  # 验证网格文件 / Validation mesh files  
+  val_meshes:
+    - 'model/old-man-head-retopo.obj'
+    - 'model/new/artist3-ear-newui.obj'
+  
+  # 数据增强配置 / Data augmentation configuration
+  augmentation:
+    enabled: false
+    rotation: true
+    scaling: true
+    noise: true
+
+# 评估配置 / Evaluation configuration
+evaluation:
+  # 评估指标 / Evaluation metrics
+  metrics:
+    - 'triplet_accuracy'
+    - 'mining_success_rate'
+    - 'classification_accuracy'
+    - 'regression_mse'
+    - 'retrieval_recall_at_k'
+  
+  # 评估频率 / Evaluation frequency
+  eval_frequency: 5  # 每5个epoch评估一次
+  
+  # 检索评估配置 / Retrieval evaluation configuration
+  retrieval:
+    k_values: [1, 5, 10, 20]
+    distance_metric: 'euclidean'
+    normalize_embeddings: true
+
+# 实验和日志配置 / Experiment and logging configuration
+experiment:
+  name: 'advanced_gat_training'
+  save_dir: 'experiments/advanced_training'
+  
+  # 检查点配置 / Checkpoint configuration
+  save_best_only: false
+  save_frequency: 10  # 每10个epoch保存一次
+  keep_last_n_checkpoints: 3
+  
+  # 可视化配置 / Visualization configuration
+  visualization:
+    enabled: true
+    plot_losses: true
+    plot_metrics: true
+    save_embeddings: true
+    embedding_visualization_frequency: 20
+  
+  # Wandb配置 / Wandb configuration (可选)
+  wandb:
+    enabled: false
+    project: 'gnn-pattern-retrieval'
+    entity: 'your-username'
+    tags: ['advanced-training', 'hard-mining', 'multi-task']
+
+# 调试和开发配置 / Debug and development configuration
+debug:
+  enabled: false
+  
+  # 快速运行模式 / Fast run mode
+  fast_run:
+    enabled: false
+    max_epochs: 5
+    small_dataset: true
+    reduced_batch_size: 8
+  
+  # 性能分析 / Performance profiling
+  profiling:
+    enabled: false
+    profile_memory: true
+    profile_compute: true
+  
+  # 详细日志 / Verbose logging
+  verbose_logging:
+    model_details: false
+    data_details: false
+    mining_details: false
+    loss_breakdown: true
+
+# 系统配置 / System configuration
+system:
+  # 设备配置 / Device configuration
+  device: 'auto'  # 'auto', 'cuda', 'cpu'
+  mixed_precision: false
+  
+  # 并行配置 / Parallel configuration
+  num_workers: 0
+  pin_memory: true
+  
+  # 内存管理 / Memory management
+  empty_cache_frequency: 50  # 每50个batch清空缓存
+  max_memory_usage: 0.9  # 最大GPU内存使用率
+
+# 高级功能配置 / Advanced features configuration
+advanced_features:
+  # 动态难度调整 / Dynamic difficulty adjustment
+  dynamic_mining:
+    enabled: false
+    adjustment_frequency: 10
+    difficulty_schedule: 'linear'  # 'linear', 'exponential', 'step'
+  
+  # 课程学习 / Curriculum learning
+  curriculum_learning:
+    enabled: false
+    start_easy: true
+    difficulty_increase_rate: 0.1
+  
+  # 知识蒸馏 / Knowledge distillation
+  knowledge_distillation:
+    enabled: false
+    teacher_model_path: null
+    temperature: 4.0
+    alpha: 0.7
+  
+  # 模型集成 / Model ensemble
+  ensemble:
+    enabled: false
+    num_models: 3
+    ensemble_method: 'voting'  # 'voting', 'averaging'

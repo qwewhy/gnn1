@@ -1,0 +1,81 @@
+# 硬三元组挖掘配置文件 / Hard triplet mining configuration
+# File: configs/hard_mining_config.yaml
+
+# 基本训练配置
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  num_epochs: 100
+  device: 'cuda'  # 'cuda' or 'cpu'
+
+# 硬三元组挖掘配置
+hard_mining:
+  enabled: true
+  
+  # 挖掘策略类型
+  # 'hard' - 纯硬三元组挖掘
+  # 'semi_hard' - 半硬三元组挖掘  
+  # 'adaptive' - 自适应混合挖掘（推荐）
+  mining_type: 'adaptive'
+  
+  # 三元组损失边界值
+  margin: 0.5
+  
+  # 距离计算方式
+  squared: false  # true: 使用平方欧氏距离, false: 使用欧氏距离
+  
+  # 自适应挖掘比例配置（仅在mining_type='adaptive'时有效）
+  adaptive_ratios:
+    hard_ratio: 0.3      # 硬三元组比例
+    semi_hard_ratio: 0.5 # 半硬三元组比例  
+    easy_ratio: 0.2      # 简单三元组比例
+    
+  # 候选样本倍数（硬挖掘时从多少倍的样本中选择）
+  candidate_multiplier: 3
+  
+  # 统计和日志配置
+  enable_statistics: true
+  log_frequency: 10  # 每多少个batch记录一次统计信息
+
+# 数据集配置
+dataset:
+  patch_dataset_path: "data/processed/pyg_patch_dataset_with_geometry.pt"
+  mesh_path: "model/stanford-bunny-retopo.obj"
+  
+  # 几何三元组生成配置（作为后备方案）
+  geometric_fallback:
+    min_faces: 10
+    max_faces: 20
+    max_attempts: 10
+
+# 模型配置
+model:
+  # 编码器配置（用于硬挖掘）
+  encoder:
+    input_dim: 8
+    hidden_dim: 64
+    output_dim: 128
+    num_heads: 4
+    num_layers: 3
+    dropout: 0.1
+    
+  # 三元组损失配置
+  triplet_loss:
+    margin: 0.5
+    p: 2  # 距离计算的p范数
+    reduction: 'mean'
+
+# 实验配置
+experiment:
+  name: "hard_mining_experiment"
+  save_dir: "src/train/training/checkpoints/hard_mining"
+  
+  # 对比实验配置
+  comparison:
+    enable_geometric_baseline: true  # 是否运行几何方法作为对比
+    enable_random_baseline: true     # 是否运行随机采样作为对比
+    
+  # 评估配置
+  evaluation:
+    metrics: ['triplet_accuracy', 'mining_success_rate', 'triplet_difficulty']
+    eval_frequency: 5  # 每多少个epoch评估一次
