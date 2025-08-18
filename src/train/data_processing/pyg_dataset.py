@@ -84,16 +84,32 @@ class PatchDataset(InMemoryDataset):
         quality_map = {'new': 1, 'old': 0}
 
         for row in tqdm.tqdm(all_patterns, desc="Processing Patches"):
-            (id, edgebreaker_encoding, canonical_form, sides,
-             complexity_score, num_vertices, num_faces, quality,
-             boundary_vertices_json, vertex_normals_json, mean_curvatures_json,
-             gaussian_curvatures_json, edge_lengths_json, edge_curvatures_json,
-             avg_curvature, curvature_variance, total_boundary_length, area) = row
+            try:
+                (id, edgebreaker_encoding, canonical_form, sides,
+                 complexity_score, num_vertices, num_faces, quality,
+                 boundary_vertices_json, vertex_normals_json, mean_curvatures_json,
+                 gaussian_curvatures_json, edge_lengths_json, edge_curvatures_json,
+                 avg_curvature, curvature_variance, total_boundary_length, area) = row
 
-            parser = ProperPatternParser(pattern_string=edgebreaker_encoding, sides=sides)
-            graph_data = parser.parse()
-            num_nodes = graph_data["num_nodes"]
-            num_edges = graph_data["edge_index"].shape[1]
+                parser = ProperPatternParser(pattern_string=edgebreaker_encoding, sides=sides)
+                graph_data = parser.parse()
+                
+                # 验证graph_data的格式
+                if not isinstance(graph_data, dict) or "num_nodes" not in graph_data or "edge_index" not in graph_data:
+                    print(f"跳过样本 {id}: 解析结果格式错误")
+                    continue
+                    
+                num_nodes = graph_data["num_nodes"]
+                num_edges = graph_data["edge_index"].shape[1]
+                
+                # 基本验证
+                if num_nodes <= 0 or num_edges < 0:
+                    print(f"跳过样本 {id}: 无效的图结构 (nodes={num_nodes}, edges={num_edges})")
+                    continue
+            
+            except Exception as e:
+                print(f"跳过样本 {id}: 处理失败 - {e}")
+                continue
 
             has_geometry = boundary_vertices_json is not None
             geometry_features = None

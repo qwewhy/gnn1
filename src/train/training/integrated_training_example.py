@@ -13,7 +13,7 @@ from typing import Dict, Any
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(project_root))
 
-from src.train.training.improved_train import ImprovedTrainer
+from src.train.training.basic_train import ImprovedTrainer
 from src.train.training.advanced_training_system import create_advanced_training_system
 from src.train.training.hard_triplet_mining import TripletMiningManager
 from src.train.models.improved_gat_encoder import MetricLearningGAT

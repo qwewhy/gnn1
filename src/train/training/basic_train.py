@@ -1,4 +1,4 @@
-# File: src/train/training/improved_train.py
+# File: src/train/training/basic_train.py
 # 训练主模块 / Main training module
 
 import os

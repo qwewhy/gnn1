@@ -32,16 +32,19 @@ class TripletMiner(ABC):
 class BatchHardMiner(TripletMiner):
     """批次硬三元组挖掘器"""
     
-    def __init__(self, margin: float = 0.5, squared: bool = False):
+    def __init__(self, margin: float = 0.3, squared: bool = False, relaxed_threshold: float = 0.8):
         """
         初始化批次硬挖掘器
         
         Args:
             margin: 三元组损失边界
             squared: 是否使用平方欧氏距离
+            relaxed_threshold: 宽松阈值比例（用于更容易找到硬三元组）
         """
         self.margin = margin
         self.squared = squared
+        self.relaxed_threshold = relaxed_threshold
+        self.min_triplets = 1  # 确保至少生成一些三元组
         self.logger = logging.getLogger(__name__)
     
     def mine_triplets(self, embeddings: torch.Tensor, labels: torch.Tensor,
@@ -93,14 +96,19 @@ class BatchHardMiner(TripletMiner):
             pos_dist = distance_matrix[i, hardest_positive_idx]
             neg_dist = distance_matrix[i, hardest_negative_idx]
             
-            if pos_dist + self.margin > neg_dist:  # 违反边界的硬三元组
+            # 使用更宽松的条件：降低margin阈值
+            relaxed_margin = self.margin * self.relaxed_threshold
+            if pos_dist + relaxed_margin > neg_dist:  # 违反边界的硬三元组
                 anchor_indices.append(i)
                 positive_indices.append(hardest_positive_idx)
                 negative_indices.append(hardest_negative_idx)
         
         if not anchor_indices:
-            # 如果没有硬三元组，随机采样一些
-            return self._fallback_random_sampling(batch_size, labels, embeddings.device)
+            # 如果没有硬三元组，尝试半硬挖掘作为回退
+            self.logger.warning(f"未找到硬三元组（margin={self.margin:.3f}），尝试半硬挖掘")
+            return self._fallback_semi_hard_mining(embeddings, labels, distance_matrix)
+        
+        self.logger.debug(f"成功挖掘到 {len(anchor_indices)} 个硬三元组")
         
         return (torch.tensor(anchor_indices, device=embeddings.device),
                 torch.tensor(positive_indices, device=embeddings.device),
@@ -117,22 +125,123 @@ class BatchHardMiner(TripletMiner):
         
         return distances
     
-    def _fallback_random_sampling(self, batch_size: int, labels: torch.Tensor, 
-                                device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """回退到随机采样"""
-        self.logger.warning("未找到硬三元组，使用随机采样")
+    def _fallback_semi_hard_mining(self, embeddings: torch.Tensor, labels: torch.Tensor, 
+                                   distance_matrix: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """回退到半硬挖掘"""
+        batch_size = embeddings.size(0)
+        device = embeddings.device
         
-        # 简单随机采样逻辑
-        anchor_indices = torch.randperm(batch_size, device=device)[:batch_size//3]
-        positive_indices = torch.randperm(batch_size, device=device)[:batch_size//3]
-        negative_indices = torch.randperm(batch_size, device=device)[:batch_size//3]
+        labels = labels.view(-1, 1)
+        label_equal = labels == labels.t()
         
-        return anchor_indices, positive_indices, negative_indices
+        anchor_indices = []
+        positive_indices = []
+        negative_indices = []
+        
+        for i in range(batch_size):
+            positive_mask = label_equal[i] & (torch.arange(batch_size, device=device) != i)
+            negative_mask = ~label_equal[i]
+            
+            if not positive_mask.any() or not negative_mask.any():
+                continue
+            
+            # 选择任意正样本
+            pos_idx = positive_mask.nonzero(as_tuple=True)[0][0]
+            pos_dist = distance_matrix[i, pos_idx]
+            
+            # 找到满足半硬条件的负样本
+            neg_distances = distance_matrix[i][negative_mask]
+            neg_indices = negative_mask.nonzero(as_tuple=True)[0]
+            
+            # 半硬条件：pos_dist < neg_dist < pos_dist + margin
+            semi_hard_mask = (neg_distances > pos_dist) & (neg_distances < pos_dist + self.margin)
+            
+            if semi_hard_mask.any():
+                valid_neg_indices = neg_indices[semi_hard_mask]
+                chosen_neg_idx = valid_neg_indices[0]  # 选择第一个满足条件的
+                
+                anchor_indices.append(i)
+                positive_indices.append(pos_idx)
+                negative_indices.append(chosen_neg_idx)
+        
+        if anchor_indices:
+            self.logger.info(f"半硬挖掘成功：找到 {len(anchor_indices)} 个半硬三元组")
+            return (torch.tensor(anchor_indices, device=device),
+                    torch.tensor(positive_indices, device=device),
+                    torch.tensor(negative_indices, device=device))
+        else:
+            # 最终回退到智能随机采样
+            return self._fallback_smart_random_sampling(batch_size, labels, device)
+    
+    def _fallback_smart_random_sampling(self, batch_size: int, labels: torch.Tensor, 
+                                       device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """智能随机采样（确保标签正确性）"""
+        self.logger.warning("所有挖掘策略失败，使用智能随机采样")
+        
+        # 创建标签映射
+        unique_labels = torch.unique(labels)
+        if len(unique_labels) < 2:
+            # 如果标签类别不足，使用简单随机采样
+            count = max(1, batch_size // 6)
+            indices = torch.randperm(batch_size, device=device)
+            return indices[:count], indices[count:2*count], indices[2*count:3*count]
+        
+        label_to_indices = {}
+        for label in unique_labels:
+            label_to_indices[label.item()] = (labels == label).nonzero(as_tuple=True)[0]
+        
+        anchor_indices = []
+        positive_indices = []
+        negative_indices = []
+        
+        # 生成一定数量的有效三元组
+        target_count = min(10, batch_size // 3)
+        attempts = 0
+        max_attempts = target_count * 5
+        
+        while len(anchor_indices) < target_count and attempts < max_attempts:
+            attempts += 1
+            
+            # 随机选择锚点
+            anchor_idx = torch.randint(batch_size, (1,)).item()
+            anchor_label = labels[anchor_idx].item()
+            
+            # 找正样本
+            positive_candidates = label_to_indices[anchor_label]
+            positive_candidates = positive_candidates[positive_candidates != anchor_idx]
+            
+            if len(positive_candidates) == 0:
+                continue
+            
+            positive_idx = positive_candidates[torch.randint(len(positive_candidates), (1,))].item()
+            
+            # 找负样本
+            negative_labels = [l for l in label_to_indices.keys() if l != anchor_label]
+            if not negative_labels:
+                continue
+            
+            negative_label = negative_labels[torch.randint(len(negative_labels), (1,))]
+            negative_candidates = label_to_indices[negative_label]
+            negative_idx = negative_candidates[torch.randint(len(negative_candidates), (1,))].item()
+            
+            anchor_indices.append(anchor_idx)
+            positive_indices.append(positive_idx)
+            negative_indices.append(negative_idx)
+        
+        if anchor_indices:
+            self.logger.info(f"智能随机采样：生成 {len(anchor_indices)} 个有效三元组")
+            return (torch.tensor(anchor_indices, device=device),
+                    torch.tensor(positive_indices, device=device),
+                    torch.tensor(negative_indices, device=device))
+        else:
+            # 极端情况：返回空
+            empty_tensor = torch.tensor([], dtype=torch.long, device=device)
+            return empty_tensor, empty_tensor, empty_tensor
 
 class SemiHardMiner(TripletMiner):
     """半硬三元组挖掘器"""
     
-    def __init__(self, margin: float = 0.5, squared: bool = False):
+    def __init__(self, margin: float = 0.3, squared: bool = False):
         self.margin = margin
         self.squared = squared
         self.logger = logging.getLogger(__name__)
@@ -201,8 +310,8 @@ class SemiHardMiner(TripletMiner):
 class AdaptiveMiner(TripletMiner):
     """自适应三元组挖掘器"""
     
-    def __init__(self, margin: float = 0.5, hard_ratio: float = 0.3, 
-                 semi_hard_ratio: float = 0.5, easy_ratio: float = 0.2):
+    def __init__(self, margin: float = 0.3, hard_ratio: float = 0.2, 
+                 semi_hard_ratio: float = 0.6, easy_ratio: float = 0.2):
         """
         自适应挖掘器，结合硬、半硬和简单三元组
         

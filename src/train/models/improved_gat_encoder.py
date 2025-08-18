@@ -17,11 +17,12 @@ class ImprovedGATEncoder(nn.Module):
     def __init__(self,
                  anchor_in_channels: int = 8,  # 6维拓扑 + 2维几何
                  pattern_in_channels: int = 8,  # 6维拓扑 + 2维曲率
-                 hidden_channels: int = 128,
+                 hidden_channels: int = 256,  # 增加隐藏层维度提高模型容量
                  out_channels: int = 128,
                  num_heads: int = 4,
                  edge_dim: int = 3,  # 边特征维度
-                 dropout: float = 0.2):
+                 dropout: float = 0.2,
+                 enable_quality_head: bool = True):  # 新增：是否启用质量分类头
         """
         初始化改进的GAT编码器
         
@@ -36,16 +37,27 @@ class ImprovedGATEncoder(nn.Module):
         """
         super(ImprovedGATEncoder, self).__init__()
         
+        self.enable_quality_head = enable_quality_head
+        
         # 输入投影层 - 将不同输入映射到共同特征空间
+        # 增强的输入投影网络
         self.anchor_proj = nn.Sequential(
-            nn.Linear(anchor_in_channels, hidden_channels),
+            nn.Linear(anchor_in_channels, hidden_channels // 2),
+            nn.BatchNorm1d(hidden_channels // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_channels // 2, hidden_channels),
             nn.BatchNorm1d(hidden_channels),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
         
         self.pattern_proj = nn.Sequential(
-            nn.Linear(pattern_in_channels, hidden_channels),
+            nn.Linear(pattern_in_channels, hidden_channels // 2),
+            nn.BatchNorm1d(hidden_channels // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_channels // 2, hidden_channels),
             nn.BatchNorm1d(hidden_channels),
             nn.ReLU(),
             nn.Dropout(dropout)
@@ -109,18 +121,36 @@ class ImprovedGATEncoder(nn.Module):
             nn.BatchNorm1d(out_channels)
         )
         
+        # 专门的质量分类头 / Dedicated quality classification head
+        if self.enable_quality_head:
+            self.quality_branch = nn.Sequential(
+                nn.Linear(out_channels, hidden_channels // 2),
+                nn.BatchNorm1d(hidden_channels // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout + 0.1),  # 更高的dropout防止过拟合
+                nn.Linear(hidden_channels // 2, 64),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(64, 2)  # 二分类：new vs old
+            )
+        
         self.dropout = nn.Dropout(dropout)
         
-    def forward(self, data: Data, input_type: str) -> torch.Tensor:
+    def forward(self, data: Data, input_type: str, task: str = 'embedding') -> torch.Tensor:
         """
         前向传播
         
         Args:
             data: PyG数据对象
             input_type: 'anchor' 或 'pattern'
+            task: 'embedding', 'quality', 或 'both'
             
         Returns:
-            L2归一化的嵌入向量
+            根据task返回不同的输出：
+            - 'embedding': L2归一化的嵌入向量
+            - 'quality': 质量分类 logits
+            - 'both': (embedding, quality_logits)
         """
         x, edge_index, batch = data.x, data.edge_index, data.batch
         edge_attr = data.edge_attr if hasattr(data, 'edge_attr') else None
@@ -178,10 +208,24 @@ class ImprovedGATEncoder(nn.Module):
             x_embed = torch.cat([x_embed, graph_features], dim=1)
             x_embed = self.final_proj(x_embed)
         
-        # 6. L2归一化
-        x_embed = F.normalize(x_embed, p=2, dim=1)
-        
-        return x_embed
+        # 6. 根据任务类型返回不同的输出
+        if task == 'embedding':
+            # 只返回L2归一化的嵌入向量
+            x_embed = F.normalize(x_embed, p=2, dim=1)
+            return x_embed
+        elif task == 'quality' and self.enable_quality_head:
+            # 只返回质量分类的logits
+            quality_logits = self.quality_branch(x_embed)
+            return quality_logits
+        elif task == 'both' and self.enable_quality_head:
+            # 返回两者
+            x_embed_norm = F.normalize(x_embed, p=2, dim=1)
+            quality_logits = self.quality_branch(x_embed)
+            return x_embed_norm, quality_logits
+        else:
+            # 默认返回嵌入向量
+            x_embed = F.normalize(x_embed, p=2, dim=1)
+            return x_embed
     
     def get_attention_weights(self, data: Data, input_type: str, layer: int = 1) -> Tuple[torch.Tensor, torch.Tensor]:
         """

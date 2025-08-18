@@ -19,15 +19,15 @@ hard_mining:
   mining_type: 'adaptive'
   
   # 三元组损失边界值
-  margin: 0.5
+  margin: 0.3  # 降低margin提高挖掘成功率
   
   # 距离计算方式
   squared: false  # true: 使用平方欧氏距离, false: 使用欧氏距离
   
   # 自适应挖掘比例配置（仅在mining_type='adaptive'时有效）
   adaptive_ratios:
-    hard_ratio: 0.3      # 硬三元组比例
-    semi_hard_ratio: 0.5 # 半硬三元组比例  
+    hard_ratio: 0.2      # 硬三元组比例 - 减少硬样本
+    semi_hard_ratio: 0.6 # 半硬三元组比例 - 增加半硬样本
     easy_ratio: 0.2      # 简单三元组比例
     
   # 候选样本倍数（硬挖掘时从多少倍的样本中选择）
@@ -61,7 +61,7 @@ model:
     
   # 三元组损失配置
   triplet_loss:
-    margin: 0.5
+    margin: 0.3  # 与挖掘配置保持一致
     p: 2  # 距离计算的p范数
     reduction: 'mean'
 
