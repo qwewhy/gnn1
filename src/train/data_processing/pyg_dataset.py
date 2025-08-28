@@ -7,6 +7,7 @@ from torch_geometric.data import InMemoryDataset, Data
 from pathlib import Path
 import tqdm
 import json
+import numpy as np
 
 # 使用集中的路径管理器
 from src.common.path_manager import path_manager
@@ -40,7 +41,7 @@ class PatchDataset(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return ['pyg_patch_dataset_with_geometry.pt']
+        return ['pyg_patch_dataset_with_geometry_v2.pt'] # 使用新版本文件名
 
     def download(self):
         # 不需要下载，因为文件是本地生成的
@@ -56,25 +57,14 @@ class PatchDataset(InMemoryDataset):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        # **CRITICAL FIX**: 从数据库中选择新添加的字段
         cursor.execute("""
-                       SELECT id,
-                              edgebreaker_encoding,
-                              canonical_form,
-                              sides,
-                              complexity_score,
-                              num_vertices,
-                              num_faces,
-                              quality,
-                              boundary_vertices,
-                              vertex_normals,
-                              mean_curvatures,
-                              gaussian_curvatures,
-                              edge_lengths,
-                              edge_curvatures,
-                              avg_curvature,
-                              curvature_variance,
-                              total_boundary_length,
-                              area
+                       SELECT id, edgebreaker_encoding, canonical_form, sides,
+                              complexity_score, num_vertices, num_faces, quality,
+                              boundary_vertices, vertex_normals, mean_curvatures,
+                              gaussian_curvatures, edge_lengths, edge_curvatures,
+                              avg_curvature, curvature_variance, total_boundary_length, area,
+                              ordered_boundary_vertex_indices
                        FROM patterns
                        """)
         all_patterns = cursor.fetchall()
@@ -89,7 +79,8 @@ class PatchDataset(InMemoryDataset):
                  complexity_score, num_vertices, num_faces, quality,
                  boundary_vertices_json, vertex_normals_json, mean_curvatures_json,
                  gaussian_curvatures_json, edge_lengths_json, edge_curvatures_json,
-                 avg_curvature, curvature_variance, total_boundary_length, area) = row
+                 avg_curvature, curvature_variance, total_boundary_length, area,
+                 ordered_indices_json) = row
 
                 parser = ProperPatternParser(pattern_string=edgebreaker_encoding, sides=sides)
                 graph_data = parser.parse()
@@ -111,8 +102,9 @@ class PatchDataset(InMemoryDataset):
                 print(f"跳过样本 {id}: 处理失败 - {e}")
                 continue
 
-            has_geometry = boundary_vertices_json is not None
+            has_geometry = boundary_vertices_json is not None and ordered_indices_json is not None
             geometry_features = None
+            ordered_boundary_indices = None
             if has_geometry:
                 try:
                     geometry_features = {
@@ -123,10 +115,11 @@ class PatchDataset(InMemoryDataset):
                         'edge_lengths': torch.tensor(json.loads(edge_lengths_json), dtype=torch.float),
                         'edge_curvatures': torch.tensor(json.loads(edge_curvatures_json), dtype=torch.float),
                     }
+                    ordered_boundary_indices = json.loads(ordered_indices_json)
                 except (json.JSONDecodeError, TypeError):
                     has_geometry = False
 
-            # 统一节点特征为8维
+            # --- 节点特征构建 (未修改) ---
             topology_features = torch.cat([
                 graph_data["node_valence"].float().unsqueeze(1),
                 graph_data["is_boundary_node"].float().unsqueeze(1),
@@ -135,34 +128,61 @@ class PatchDataset(InMemoryDataset):
                 graph_data["local_topology_config"].float().unsqueeze(1),
                 graph_data["boundary_position_encoding"].float().unsqueeze(1)
             ], dim=1)
+            
+            # **CRITICAL FIX**: 修正节点几何特征的匹配
+            # 原始的边界顶点（0到N-1）与几何特征是一一对应的
+            x = torch.zeros(num_nodes, topology_features.shape[1] + 2)
+            x[:, :topology_features.shape[1]] = topology_features
 
-            if has_geometry and num_nodes > 0 and num_nodes == len(geometry_features['mean_curvatures']):
-                mean_curv = geometry_features['mean_curvatures'].unsqueeze(1)
-                gauss_curv = geometry_features['gaussian_curvatures'].unsqueeze(1)
-                x = torch.cat([topology_features, mean_curv, gauss_curv], dim=1)
-            else:
-                padding = torch.zeros(num_nodes, 2)
-                x = torch.cat([topology_features, padding], dim=1)
+            if has_geometry and len(geometry_features['mean_curvatures']) == sides:
+                # 假设几何特征是按照初始边界（0到sides-1）的顺序存储的
+                for i in range(sides):
+                    if i < num_nodes:
+                        x[i, -2] = geometry_features['mean_curvatures'][i]
+                        x[i, -1] = geometry_features['gaussian_curvatures'][i]
 
-            # 统一边特征为3维
+            # --- 边特征构建 (已修正) ---
             is_boundary_edge = graph_data["is_boundary_edge"].float().view(-1, 1)
+            edge_length_features = torch.zeros(num_edges, 1)
+            edge_curv_features = torch.zeros(num_edges, 1)
 
             if has_geometry and num_edges > 0:
-                edge_length_features = torch.zeros(num_edges, 1)
-                edge_curv_features = torch.zeros(num_edges, 1)
+                # **CRITICAL FIX**: 使用有序边界索引进行鲁棒的特征匹配
+                
+                # 1. 创建从局部顶点索引到全局顶点索引的映射
+                # 假设解码器生成的顶点索引与编码器中的局部索引一致
+                local_to_global_map = {i: ordered_boundary_indices[i] for i in range(sides) if i < len(ordered_boundary_indices)}
+                
+                # 2. 创建从全局边到其几何特征的映射
+                global_edge_to_feature_map = {}
+                num_geom_edges = len(geometry_features['edge_lengths'])
+                for i in range(num_geom_edges):
+                    global_v1 = ordered_boundary_indices[i]
+                    global_v2 = ordered_boundary_indices[(i + 1) % num_geom_edges]
+                    edge = tuple(sorted((global_v1, global_v2)))
+                    global_edge_to_feature_map[edge] = (
+                        geometry_features['edge_lengths'][i],
+                        geometry_features['edge_curvatures'][i]
+                    )
 
-                boundary_edge_mask = graph_data["is_boundary_edge"]
-                if boundary_edge_mask.sum() > 0 and len(geometry_features['edge_lengths']) > 0:
-                    boundary_edge_indices = torch.where(boundary_edge_mask)[0]
-                    for i, edge_idx in enumerate(boundary_edge_indices):
-                        geom_idx = i % len(geometry_features['edge_lengths'])
-                        edge_length_features[edge_idx] = geometry_features['edge_lengths'][geom_idx]
-                        edge_curv_features[edge_idx] = geometry_features['edge_curvatures'][geom_idx]
+                # 3. 遍历图中的所有边，并使用映射分配特征
+                edge_index_np = graph_data["edge_index"].t().numpy()
+                for i in range(num_edges):
+                    local_v1, local_v2 = edge_index_np[i]
+                    
+                    # 检查这条局部边是否是初始边界的一部分
+                    if local_v1 in local_to_global_map and local_v2 in local_to_global_map:
+                        global_v1 = local_to_global_map[local_v1]
+                        global_v2 = local_to_global_map[local_v2]
+                        
+                        global_edge = tuple(sorted((global_v1, global_v2)))
+                        
+                        if global_edge in global_edge_to_feature_map:
+                            length, curv = global_edge_to_feature_map[global_edge]
+                            edge_length_features[i] = length
+                            edge_curv_features[i] = curv
 
-                edge_attr = torch.cat([is_boundary_edge, edge_length_features, edge_curv_features], dim=1)
-            else:
-                padding = torch.zeros(num_edges, 2)
-                edge_attr = torch.cat([is_boundary_edge, padding], dim=1)
+            edge_attr = torch.cat([is_boundary_edge, edge_length_features, edge_curv_features], dim=1)
 
             data = Data(
                 x=x,

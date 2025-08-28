@@ -80,6 +80,7 @@ def setup_database(db_path: Path) -> sqlite3.Connection:
                        curvature_variance REAL, -- 曲率方差
                        total_boundary_length REAL, -- 边界总长度
                        area REAL, -- 面片面积
+                       ordered_boundary_vertex_indices TEXT, -- 有序边界顶点索引 [idx1, idx2, ...]
                        UNIQUE(canonical_form, sides)
                    );
                    """)
@@ -439,6 +440,10 @@ class ImprovedGeometricFeatureExtractor:
             
             features = {}
             
+            # **CRITICAL FIX**: 将有序的全局顶点索引添加到特征中
+            # 确保转换为Python int类型以支持JSON序列化
+            features['ordered_boundary_vertex_indices'] = [int(v) for v in boundary_vertices]
+
             # 1. 提取边界顶点坐标
             features['boundary_vertices'] = [
                 mesh.vertices[v].tolist() for v in boundary_vertices
@@ -781,6 +786,7 @@ def main():
             edgebreaker_encoding, canonical_form, sides, topology_metadata, geometric_features = encoding_result
 
             try:
+                # **CRITICAL FIX**: 更新INSERT语句以包含新字段
                 cursor.execute("""
                                INSERT INTO patterns (edgebreaker_encoding, canonical_form, sides,
                                                      complexity_score, num_vertices, num_faces,
@@ -789,8 +795,9 @@ def main():
                                                      mean_curvatures, gaussian_curvatures,
                                                      edge_lengths, edge_curvatures,
                                                      avg_curvature, curvature_variance,
-                                                     total_boundary_length, area)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                                     total_boundary_length, area,
+                                                     ordered_boundary_vertex_indices)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                                """, (
                                    edgebreaker_encoding, canonical_form, sides,
                                    topology_metadata['complexity_score'],
@@ -806,7 +813,8 @@ def main():
                                    geometric_features['avg_curvature'],
                                    geometric_features['curvature_variance'],
                                    geometric_features['total_boundary_length'],
-                                   geometric_features['area']
+                                   geometric_features['area'],
+                                   json.dumps(geometric_features['ordered_boundary_vertex_indices']) # 添加新数据
                                ))
 
                 successful_patches += 1

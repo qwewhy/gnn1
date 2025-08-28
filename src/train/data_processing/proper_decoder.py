@@ -58,74 +58,81 @@ class EdgebreakerDecoder:
     def _edgebreaker_decode(self, vertices: List[int], edges: Set[Tuple[int, int]], 
                            faces: List[List[int]], edgebreaker_ops: List[str],
                            num_boundary_sides: int) -> Dict:
-        """执行Edgebreaker解码"""
-        if not edgebreaker_ops:
+        """
+        执行Edgebreaker解码 (修正的核心逻辑)
+        Executes the Edgebreaker decoding (Corrected core logic).
+        """
+        if not edgebreaker_ops or num_boundary_sides < 3:
             return self._build_graph_data(vertices, edges, faces, num_boundary_sides)
             
-        active_front = deque(range(num_boundary_sides))  # 当前活跃前沿
+        active_front = deque(range(num_boundary_sides))
         
+        # 跳过可能存在的 'S' 操作符
+        if edgebreaker_ops and edgebreaker_ops[0] == 'S':
+            edgebreaker_ops = edgebreaker_ops[1:]
+
         for op in edgebreaker_ops:
-            if not active_front or len(active_front) < 2:
-                break
+            if len(active_front) < 2:
+                break # 边界太小，无法继续操作
                 
-            if op == 'S':  # Start - 开始三角剖分
-                if len(active_front) >= 3:
-                    v1 = active_front.popleft()
-                    v2 = active_front.popleft()
-                    v3 = active_front[0] if active_front else v1
-                    
-                    # 添加三角形
+            # 门 (Gate) 是活动边界的前两个顶点
+            v1, v2 = active_front[0], active_front[1]
+
+            if op == 'C':  # Create: 添加新顶点
+                # 创建一个新顶点
+                new_vertex = len(vertices)
+                vertices.append(new_vertex)
+                
+                # 形成新三角形 (v1, v2, new_vertex)
+                faces.append([v1, v2, new_vertex])
+                edges.add(tuple(sorted((v1, v2))))
+                edges.add(tuple(sorted((v2, new_vertex))))
+                edges.add(tuple(sorted((new_vertex, v1))))
+                
+                # 更新活动边界：用 (v1, new_vertex, v2) 替换 (v1, v2)
+                # 这相当于在v1和v2之间插入new_vertex
+                active_front[1] = new_vertex
+                active_front.insert(2, v2)
+                
+            elif op == 'L':  # Left Zip: 与左侧顶点缝合
+                if len(active_front) < 3: break
+                # 第三个顶点是边界上v1的前一个顶点
+                v3 = active_front[-1]
+                
+                # 形成新三角形 (v1, v2, v3)
+                faces.append([v1, v2, v3])
+                edges.add(tuple(sorted((v1, v2))))
+                edges.add(tuple(sorted((v2, v3))))
+                edges.add(tuple(sorted((v3, v1))))
+                
+                # 更新活动边界：v1成为内部点，将其移除
+                active_front.popleft()
+
+            elif op == 'R':  # Right Zip: 与右侧顶点缝合
+                if len(active_front) < 3: break
+                # 第三个顶点是边界上v2的后一个顶点
+                v3 = active_front[2]
+
+                # 形成新三角形 (v1, v2, v3)
+                faces.append([v1, v2, v3])
+                edges.add(tuple(sorted((v1, v2))))
+                edges.add(tuple(sorted((v2, v3))))
+                edges.add(tuple(sorted((v3, v1))))
+
+                # 更新活动边界：v2成为内部点，将其移除
+                active_front.popleft() # 移除 v1
+                active_front.popleft() # 移除 v2
+                active_front.appendleft(v1) # 把 v1 加回来
+
+            elif op == 'E':  # End: 结束当前分量
+                if len(active_front) == 3:
+                    # 形成最后一个三角形
+                    v1, v2, v3 = active_front[0], active_front[1], active_front[2]
                     faces.append([v1, v2, v3])
                     edges.add(tuple(sorted((v1, v2))))
                     edges.add(tuple(sorted((v2, v3))))
                     edges.add(tuple(sorted((v3, v1))))
-                    
-            elif op == 'C':  # Case - 添加新顶点
-                v1 = active_front.popleft()
-                v2 = active_front[0] if active_front else v1
-                
-                # 创建新顶点
-                new_vertex = len(vertices)
-                vertices.append(new_vertex)
-                
-                # 添加三角形
-                faces.append([v1, v2, new_vertex])
-                edges.add(tuple(sorted((v1, v2))))
-                edges.add(tuple(sorted((v2, new_vertex))))
-                edges.add(tuple(sorted((new_vertex, v1))))
-                
-                # 更新活跃前沿
-                active_front.appendleft(new_vertex)
-                
-            elif op == 'L':  # Left - 左扩展
-                v1 = active_front[0] if len(active_front) > 0 else 0
-                v2 = active_front[1] if len(active_front) > 1 else v1
-                
-                new_vertex = len(vertices)
-                vertices.append(new_vertex)
-                
-                faces.append([v1, v2, new_vertex])
-                edges.add(tuple(sorted((v1, v2))))
-                edges.add(tuple(sorted((v2, new_vertex))))
-                edges.add(tuple(sorted((new_vertex, v1))))
-                
-                active_front.appendleft(new_vertex)
-                
-            elif op == 'R':  # Right - 右扩展
-                v1 = active_front[-2] if len(active_front) > 1 else 0
-                v2 = active_front[-1] if len(active_front) > 0 else 0
-                
-                new_vertex = len(vertices)
-                vertices.append(new_vertex)
-                
-                faces.append([v1, v2, new_vertex])
-                edges.add(tuple(sorted((v1, v2))))
-                edges.add(tuple(sorted((v2, new_vertex))))
-                edges.add(tuple(sorted((new_vertex, v1))))
-                
-                active_front.append(new_vertex)
-                
-            elif op == 'E':  # End - 结束
+                active_front.clear() # 清空边界
                 break
         
         return self._build_graph_data(vertices, edges, faces, num_boundary_sides)
@@ -134,8 +141,30 @@ class EdgebreakerDecoder:
                          faces: List[List[int]], num_boundary_sides: int) -> Dict:
         """构建图数据结构"""
         num_nodes = len(vertices)
-        boundary_vertices = list(range(num_boundary_sides))
         
+        # 确定最终的边界顶点
+        # 初始边界顶点是0到N-1，但解码后实际的边界可能不同
+        # 我们通过边的度数来重新计算
+        node_degrees = defaultdict(int)
+        for v1, v2 in edges:
+            node_degrees[v1] += 1
+            node_degrees[v2] += 1
+        
+        # 边界顶点是那些只属于一个边界环的顶点
+        # 简化的方法是检查度数，但这不完全准确
+        # 更准确的方法是追踪未被两个面共享的边
+        edge_face_counts = defaultdict(int)
+        for face in faces:
+            for i in range(3):
+                edge = tuple(sorted((face[i], face[(i+1)%3])))
+                edge_face_counts[edge] += 1
+        
+        boundary_edges = {edge for edge, count in edge_face_counts.items() if count == 1}
+        final_boundary_vertices = set()
+        for v1, v2 in boundary_edges:
+            final_boundary_vertices.add(v1)
+            final_boundary_vertices.add(v2)
+
         # 创建edge_index
         if edges:
             edge_list = []
@@ -148,18 +177,19 @@ class EdgebreakerDecoder:
         
         # 计算节点特征
         node_features = self._compute_comprehensive_node_features(
-            vertices, edges, faces, boundary_vertices
+            vertices, edges, faces, list(final_boundary_vertices)
         )
         
         # 计算边特征
-        edge_features = self._compute_edge_features(edges, boundary_vertices, edge_index)
+        edge_features = self._compute_edge_features(boundary_edges, edge_index)
         
         return {
             "edge_index": edge_index,
             "num_nodes": num_nodes,
             "node_features": node_features,
             "edge_features": edge_features,
-            "faces": faces
+            "faces": faces,
+            "boundary_edges": boundary_edges
         }
     
     def _compute_comprehensive_node_features(self, vertices: List[int], edges: Set[Tuple[int, int]], 
@@ -280,21 +310,17 @@ class EdgebreakerDecoder:
         
         return local_features
     
-    def _compute_edge_features(self, edges: Set[Tuple[int, int]], boundary_vertices: List[int], 
+    def _compute_edge_features(self, boundary_edges: Set[Tuple[int, int]], 
                               edge_index: torch.Tensor) -> torch.Tensor:
         """计算边特征"""
         if edge_index.numel() == 0:
             return torch.empty((0, 1), dtype=torch.float)
         
-        boundary_set = set(boundary_vertices)
         edge_features = []
         
-        # 遍历edge_index的每条边（已经是双向的）
         for i in range(edge_index.shape[1]):
             v1, v2 = edge_index[0, i].item(), edge_index[1, i].item()
-            
-            # 边界边标记
-            is_boundary_edge = (v1 in boundary_set) and (v2 in boundary_set)
+            is_boundary_edge = tuple(sorted((v1, v2))) in boundary_edges
             edge_features.append([float(is_boundary_edge)])
         
         return torch.tensor(edge_features, dtype=torch.float)
@@ -310,6 +336,8 @@ class EdgebreakerDecoder:
         
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
         
+        boundary_edges = {tuple(sorted((i, (i + 1) % num_nodes))) for i in range(num_nodes)}
+
         return {
             "edge_index": edge_index,
             "num_nodes": num_nodes,
@@ -322,7 +350,8 @@ class EdgebreakerDecoder:
                 "boundary_position_encoding": torch.arange(num_nodes, dtype=torch.float) / num_nodes
             },
             "edge_features": torch.ones((edge_index.shape[1], 1), dtype=torch.float),
-            "faces": []
+            "faces": [],
+            "boundary_edges": boundary_edges
         }
 
 class ProperPatternParser:
@@ -334,13 +363,11 @@ class ProperPatternParser:
         
     def parse(self) -> Dict:
         """解析模式字符串生成图拓扑"""
-        # 使用完整的Edgebreaker解码
         graph_data = self.decoder.decode_pattern_string(self.pattern_string, self.sides)
         
         if graph_data is None:
-            return self._create_boundary_fallback()
+            graph_data = self.decoder._create_fallback_graph(self.sides)
         
-        # 整合所有特征
         node_features = graph_data["node_features"]
         
         return {
@@ -352,7 +379,8 @@ class ProperPatternParser:
             "distance_to_singular": node_features["distance_to_singular"],
             "local_topology_config": node_features["local_topology_config"],
             "boundary_position_encoding": node_features["boundary_position_encoding"],
-            "is_boundary_edge": graph_data["edge_features"]
+            "is_boundary_edge": graph_data["edge_features"],
+            "boundary_edges": graph_data["boundary_edges"] # 传递边界边信息
         }
     
     def _create_boundary_fallback(self) -> Dict:
