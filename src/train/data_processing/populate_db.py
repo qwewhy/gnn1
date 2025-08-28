@@ -6,10 +6,12 @@ import sqlite3
 import trimesh
 import numpy as np
 import networkx as nx
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Set
 import tqdm
 import json
 import importlib.util
+import logging
+from collections import deque, defaultdict
 from pathlib import Path
 
 # 添加项目路径管理
@@ -86,113 +88,592 @@ def setup_database(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def extract_random_patch(mesh: trimesh.Trimesh, face_adjacency_graph: nx.Graph,
-                         min_faces: int = 10, max_faces: int = 20) -> Optional[List[int]]:
-    """使用BFS从网格中提取连通的面片"""
-    num_total_faces = len(mesh.faces)
-    if num_total_faces < min_faces:
+class ImprovedPatchExtractor:
+    """改进的面片提取器，增加了多项验证"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        
+    def extract_valid_patch(self, mesh: trimesh.Trimesh, 
+                           min_faces: int = 10, max_faces: int = 20,
+                           max_attempts: int = 50) -> Optional[List[int]]:
+        """提取几何和拓扑上都有效的面片"""
+        
+        # 预处理网格
+        if not self._is_mesh_valid(mesh):
+            self.logger.warning("网格无效，跳过处理")
+            return None
+            
+        face_adjacency_graph = self._build_robust_face_adjacency(mesh)
+        
+        for attempt in range(max_attempts):
+            patch_faces = self._extract_single_patch(
+                mesh, face_adjacency_graph, min_faces, max_faces
+            )
+            
+            if patch_faces is None:
+                continue
+                
+            # 多重验证
+            if self._validate_patch_comprehensively(mesh, patch_faces):
+                self.logger.info(f"成功提取有效patch，尝试次数: {attempt + 1}")
+                return patch_faces
+                
+        self.logger.warning(f"经过{max_attempts}次尝试，未能提取到有效patch")
         return None
-
-    # 尝试多次找到合适的面片
-    for _ in range(10):
-        start_face_idx = np.random.randint(0, num_total_faces)
-
-        q = [start_face_idx]
+    
+    def _is_mesh_valid(self, mesh: trimesh.Trimesh) -> bool:
+        """验证网格基本有效性"""
+        try:
+            return (
+                len(mesh.faces) >= 20 and  # 足够的面
+                len(mesh.vertices) >= 10 and  # 足够的顶点
+                not mesh.is_empty  # 非空
+            )
+        except:
+            # 如果验证失败，进行基本检查
+            return len(mesh.faces) >= 20 and len(mesh.vertices) >= 10
+    
+    def _build_robust_face_adjacency(self, mesh: trimesh.Trimesh) -> nx.Graph:
+        """构建鲁棒的面邻接图"""
+        try:
+            # 使用trimesh内建的面邻接关系
+            face_adjacency = mesh.face_adjacency
+            graph = nx.Graph()
+            graph.add_edges_from(face_adjacency)
+            return graph
+        except Exception as e:
+            self.logger.error(f"构建面邻接图失败: {e}")
+            # 备用方法：手动构建
+            return self._manual_face_adjacency(mesh)
+    
+    def _manual_face_adjacency(self, mesh: trimesh.Trimesh) -> nx.Graph:
+        """手动构建面邻接图（备用方法）"""
+        graph = nx.Graph()
+        faces = mesh.faces
+        
+        # 构建边到面的映射
+        edge_to_faces = {}
+        for face_idx, face in enumerate(faces):
+            for i in range(len(face)):
+                edge = tuple(sorted([face[i], face[(i + 1) % len(face)]]))
+                if edge not in edge_to_faces:
+                    edge_to_faces[edge] = []
+                edge_to_faces[edge].append(face_idx)
+        
+        # 添加邻接关系
+        for edge, face_list in edge_to_faces.items():
+            if len(face_list) == 2:  # 共享边的两个面
+                graph.add_edge(face_list[0], face_list[1])
+        
+        return graph
+    
+    def _extract_single_patch(self, mesh: trimesh.Trimesh, 
+                             face_adjacency_graph: nx.Graph,
+                             min_faces: int, max_faces: int) -> Optional[List[int]]:
+        """提取单个面片（BFS）"""
+        num_total_faces = len(mesh.faces)
+        if num_total_faces < min_faces:
+            return None
+        
+        # 选择连通性好的起始面
+        start_face_idx = self._select_good_start_face(
+            mesh, face_adjacency_graph, num_total_faces
+        )
+        
+        # BFS扩展
+        queue = deque([start_face_idx])
         visited = {start_face_idx}
         patch_faces = [start_face_idx]
-
-        while q and len(patch_faces) < max_faces:
-            current_face = q.pop(0)
-            for neighbor in face_adjacency_graph.neighbors(current_face):
-                if neighbor not in visited:
+        
+        while queue and len(patch_faces) < max_faces:
+            current_face = queue.popleft()
+            
+            neighbors = list(face_adjacency_graph.neighbors(current_face))
+            # 按某种策略排序邻居（比如面积、法向量相似度）
+            neighbors = self._sort_neighbors_by_quality(mesh, current_face, neighbors)
+            
+            for neighbor in neighbors:
+                if neighbor not in visited and len(patch_faces) < max_faces:
                     visited.add(neighbor)
                     patch_faces.append(neighbor)
-                    q.append(neighbor)
-                    if len(patch_faces) >= max_faces:
-                        break
+                    queue.append(neighbor)
+        
+        return patch_faces if len(patch_faces) >= min_faces else None
+    
+    def _select_good_start_face(self, mesh: trimesh.Trimesh, 
+                               graph: nx.Graph, num_faces: int) -> int:
+        """选择连通性好的起始面"""
+        # 倾向选择度数适中的面作为起始点
+        degrees = dict(graph.degree())
+        
+        # 过滤掉度数过低或过高的面
+        good_faces = [
+            face_idx for face_idx, degree in degrees.items() 
+            if 2 <= degree <= 6
+        ]
+        
+        if good_faces:
+            return np.random.choice(good_faces)
+        else:
+            return np.random.randint(0, num_faces)
+    
+    def _sort_neighbors_by_quality(self, mesh: trimesh.Trimesh, 
+                                  current_face: int, neighbors: List[int]) -> List[int]:
+        """按质量排序邻居面"""
+        if not neighbors:
+            return neighbors
+            
+        try:
+            current_normal = mesh.face_normals[current_face]
+            
+            # 计算法向量相似度
+            scores = []
+            for neighbor in neighbors:
+                neighbor_normal = mesh.face_normals[neighbor]
+                similarity = np.dot(current_normal, neighbor_normal)
+                scores.append((neighbor, similarity))
+            
+            # 按相似度降序排序
+            scores.sort(key=lambda x: x[1], reverse=True)
+            return [face_idx for face_idx, _ in scores]
+            
+        except:
+            return neighbors  # 如果计算失败，返回原顺序
+    
+    def _validate_patch_comprehensively(self, mesh: trimesh.Trimesh, 
+                                       patch_faces: List[int]) -> bool:
+        """综合验证patch的有效性"""
+        
+        # 1. 基本检查
+        if not patch_faces or len(patch_faces) < 3:
+            return False
+        
+        # 2. 检查面索引有效性
+        max_face_idx = len(mesh.faces) - 1
+        if any(face_idx < 0 or face_idx > max_face_idx for face_idx in patch_faces):
+            return False
+        
+        # 3. 检查几何连通性
+        if not self._is_geometrically_connected(mesh, patch_faces):
+            return False
+        
+        # 4. 检查边界有效性
+        boundary_info = self._compute_patch_boundary(mesh, patch_faces)
+        if boundary_info is None:
+            return False
+        
+        # 5. 检查拓扑有效性
+        if not self._is_topologically_valid(mesh, patch_faces, boundary_info):
+            return False
+        
+        return True
+    
+    def _is_geometrically_connected(self, mesh: trimesh.Trimesh, 
+                                   patch_faces: List[int]) -> bool:
+        """检查面片是否几何连通"""
+        try:
+            # 提取patch的顶点
+            patch_vertices = set()
+            for face_idx in patch_faces:
+                face = mesh.faces[face_idx]
+                patch_vertices.update(face)
+            
+            # 构建patch内部的顶点连通图
+            vertex_graph = nx.Graph()
+            for face_idx in patch_faces:
+                face = mesh.faces[face_idx]
+                for i in range(len(face)):
+                    v1, v2 = face[i], face[(i + 1) % len(face)]
+                    vertex_graph.add_edge(v1, v2)
+            
+            # 检查连通性
+            return nx.is_connected(vertex_graph)
+            
+        except Exception as e:
+            self.logger.warning(f"几何连通性检查失败: {e}")
+            return True  # 如果检查失败，假设连通
+    
+    def _compute_patch_boundary(self, mesh: trimesh.Trimesh, 
+                               patch_faces: List[int]) -> Optional[Dict]:
+        """计算面片边界信息"""
+        try:
+            patch_face_set = set(patch_faces)
+            boundary_edges = []
+            
+            # 找出边界边（只属于一个面的边）
+            edge_count = {}
+            for face_idx in patch_faces:
+                face = mesh.faces[face_idx]
+                for i in range(len(face)):
+                    edge = tuple(sorted([face[i], face[(i + 1) % len(face)]]))
+                    edge_count[edge] = edge_count.get(edge, 0) + 1
+            
+            # 边界边只出现一次
+            boundary_edges = [edge for edge, count in edge_count.items() if count == 1]
+            
+            if not boundary_edges:
+                return None
+            
+            # 构建边界路径
+            boundary_vertices = self._trace_boundary_path(boundary_edges)
+            
+            return {
+                'edges': boundary_edges,
+                'vertices': boundary_vertices,
+                'num_boundary_vertices': len(boundary_vertices) if boundary_vertices else 0
+            }
+            
+        except Exception as e:
+            self.logger.error(f"边界计算失败: {e}")
+            return None
+    
+    def _trace_boundary_path(self, boundary_edges: List[Tuple[int, int]]) -> Optional[List[int]]:
+        """追踪边界路径，形成有序的边界顶点序列"""
+        if not boundary_edges:
+            return None
+            
+        # 构建边界图
+        boundary_graph = nx.Graph()
+        boundary_graph.add_edges_from(boundary_edges)
+        
+        # 检查是否形成简单环路
+        if not all(degree == 2 for _, degree in boundary_graph.degree()):
+            self.logger.warning("边界不形成简单环路")
+            return None
+        
+        # 追踪路径
+        try:
+            start_vertex = boundary_edges[0][0]
+            path = [start_vertex]
+            current = start_vertex
+            prev = None
+            
+            while True:
+                neighbors = [n for n in boundary_graph.neighbors(current) if n != prev]
+                if not neighbors:
+                    break
+                    
+                next_vertex = neighbors[0]
+                if next_vertex == start_vertex:  # 回到起点
+                    break
+                    
+                path.append(next_vertex)
+                prev = current
+                current = next_vertex
+                
+                # 防止无限循环
+                if len(path) > len(boundary_edges) + 1:
+                    break
+            
+            return path if len(path) >= 3 else None
+            
+        except Exception as e:
+            self.logger.error(f"边界路径追踪失败: {e}")
+            return None
+    
+    def _is_topologically_valid(self, mesh: trimesh.Trimesh, 
+                               patch_faces: List[int], boundary_info: Dict) -> bool:
+        """检查拓扑有效性"""
+        try:
+            num_boundary_vertices = boundary_info['num_boundary_vertices']
+            
+            # 边界应该至少有3个顶点
+            if num_boundary_vertices < 3:
+                return False
+            
+            # 边界顶点数不应该太大（相对于面片大小）
+            if num_boundary_vertices > len(patch_faces) * 2:
+                return False
+            
+            # 使用欧拉公式检查：V - E + F = 2（对于球面拓扑）
+            # 这里是简化检查
+            patch_vertices = set()
+            patch_edges = set()
+            
+            for face_idx in patch_faces:
+                face = mesh.faces[face_idx]
+                patch_vertices.update(face)
+                for i in range(len(face)):
+                    edge = tuple(sorted([face[i], face[(i + 1) % len(face)]]))
+                    patch_edges.add(edge)
+            
+            V = len(patch_vertices)
+            E = len(patch_edges)
+            F = len(patch_faces)
+            
+            euler_char = V - E + F
+            # 对于有边界的面片，欧拉特征数应该是1
+            if not (0 <= euler_char <= 2):
+                self.logger.warning(f"拓扑检查失败: V={V}, E={E}, F={F}, χ={euler_char}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"拓扑有效性检查失败: {e}")
+            return True  # 如果检查失败，假设有效
 
-        if min_faces <= len(patch_faces) <= max_faces:
-            return patch_faces
 
-    return None
+def extract_random_patch(mesh: trimesh.Trimesh, face_adjacency_graph: nx.Graph,
+                         min_faces: int = 10, max_faces: int = 20) -> Optional[List[int]]:
+    """使用改进的面片提取器"""
+    extractor = ImprovedPatchExtractor()
+    return extractor.extract_valid_patch(mesh, min_faces, max_faces)
+
+
+class ImprovedGeometricFeatureExtractor:
+    """改进的几何特征提取器"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+    
+    def extract_features_robust(self, mesh: trimesh.Trimesh, 
+                               patch_faces: List[int], 
+                               boundary_info: Dict) -> Optional[Dict]:
+        """鲁棒的几何特征提取"""
+        try:
+            boundary_vertices = boundary_info['vertices']
+            if not boundary_vertices:
+                return None
+            
+            features = {}
+            
+            # 1. 提取边界顶点坐标
+            features['boundary_vertices'] = [
+                mesh.vertices[v].tolist() for v in boundary_vertices
+            ]
+            
+            # 2. 计算边界法线（通过相邻面的法线插值）
+            features['vertex_normals'] = self._compute_boundary_normals(
+                mesh, patch_faces, boundary_vertices
+            )
+            
+            # 3. 计算曲率（使用鲁棒方法）
+            curvatures = self._compute_robust_curvatures(
+                mesh, boundary_vertices
+            )
+            features.update(curvatures)
+            
+            # 4. 计算边几何特征
+            edge_features = self._compute_edge_features(
+                mesh, boundary_vertices
+            )
+            features.update(edge_features)
+            
+            # 5. 计算全局统计特征
+            global_features = self._compute_global_features(
+                mesh, patch_faces, features
+            )
+            features.update(global_features)
+            
+            return features
+            
+        except Exception as e:
+            self.logger.error(f"几何特征提取失败: {e}")
+            return None
+    
+    def _compute_boundary_normals(self, mesh: trimesh.Trimesh, 
+                                 patch_faces: List[int],
+                                 boundary_vertices: List[int]) -> List[List[float]]:
+        """计算边界顶点法线"""
+        try:
+            vertex_normals = []
+            
+            for vertex_idx in boundary_vertices:
+                # 找到包含此顶点的面片中的面
+                adjacent_faces = []
+                for face_idx in patch_faces:
+                    face = mesh.faces[face_idx]
+                    if vertex_idx in face:
+                        adjacent_faces.append(face_idx)
+                
+                if adjacent_faces:
+                    # 计算相邻面法线的平均值
+                    normal_sum = np.zeros(3)
+                    for face_idx in adjacent_faces:
+                        normal_sum += mesh.face_normals[face_idx]
+                    
+                    normal = normal_sum / len(adjacent_faces)
+                    # 归一化
+                    norm = np.linalg.norm(normal)
+                    if norm > 1e-10:
+                        normal = normal / norm
+                else:
+                    normal = np.array([0.0, 0.0, 1.0])  # 默认法线
+                
+                vertex_normals.append(normal.tolist())
+            
+            return vertex_normals
+            
+        except Exception as e:
+            self.logger.error(f"法线计算失败: {e}")
+            return [[0.0, 0.0, 1.0]] * len(boundary_vertices)
+    
+    def _compute_robust_curvatures(self, mesh: trimesh.Trimesh, 
+                                  boundary_vertices: List[int]) -> Dict:
+        """计算鲁棒的曲率"""
+        try:
+            mean_curvatures = []
+            gaussian_curvatures = []
+            
+            # 自适应半径
+            mesh_scale = mesh.bounding_box.extents.max()
+            radius = max(mesh_scale / 100.0, mesh.scale / 50.0)
+            
+            for vertex_idx in boundary_vertices:
+                try:
+                    vertex_pos = mesh.vertices[vertex_idx:vertex_idx+1]
+                    
+                    # 使用trimesh的离散曲率计算
+                    mean_curv = trimesh.curvature.discrete_mean_curvature_measure(
+                        mesh, vertex_pos, radius
+                    )[0]
+                    
+                    gaussian_curv = trimesh.curvature.discrete_gaussian_curvature_measure(
+                        mesh, vertex_pos, radius
+                    )[0]
+                    
+                    # 数值稳定性处理
+                    mean_curv = float(np.clip(mean_curv, -1e6, 1e6))
+                    gaussian_curv = float(np.clip(gaussian_curv, -1e6, 1e6))
+                    
+                    # 检查NaN/Inf
+                    if np.isnan(mean_curv) or np.isinf(mean_curv):
+                        mean_curv = 0.0
+                    if np.isnan(gaussian_curv) or np.isinf(gaussian_curv):
+                        gaussian_curv = 0.0
+                    
+                    mean_curvatures.append(mean_curv)
+                    gaussian_curvatures.append(gaussian_curv)
+                    
+                except Exception:
+                    # 如果单个顶点计算失败，使用默认值
+                    mean_curvatures.append(0.0)
+                    gaussian_curvatures.append(0.0)
+            
+            return {
+                'mean_curvatures': mean_curvatures,
+                'gaussian_curvatures': gaussian_curvatures
+            }
+            
+        except Exception as e:
+            self.logger.error(f"曲率计算失败: {e}")
+            num_vertices = len(boundary_vertices)
+            return {
+                'mean_curvatures': [0.0] * num_vertices,
+                'gaussian_curvatures': [0.0] * num_vertices
+            }
+    
+    def _compute_edge_features(self, mesh: trimesh.Trimesh, 
+                              boundary_vertices: List[int]) -> Dict:
+        """计算边特征"""
+        try:
+            edge_lengths = []
+            edge_curvatures = []
+            
+            num_vertices = len(boundary_vertices)
+            
+            for i in range(num_vertices):
+                v1_idx = boundary_vertices[i]
+                v2_idx = boundary_vertices[(i + 1) % num_vertices]
+                
+                # 边长
+                edge_length = np.linalg.norm(
+                    mesh.vertices[v2_idx] - mesh.vertices[v1_idx]
+                )
+                edge_length = max(edge_length, 1e-10)  # 防止零长度
+                edge_lengths.append(float(edge_length))
+                
+                # 边曲率（简化计算）
+                edge_curv = 0.0  # 可以根据需要改进计算方法
+                edge_curvatures.append(edge_curv)
+            
+            return {
+                'edge_lengths': edge_lengths,
+                'edge_curvatures': edge_curvatures
+            }
+            
+        except Exception as e:
+            self.logger.error(f"边特征计算失败: {e}")
+            num_vertices = len(boundary_vertices)
+            return {
+                'edge_lengths': [1.0] * num_vertices,
+                'edge_curvatures': [0.0] * num_vertices
+            }
+    
+    def _compute_global_features(self, mesh: trimesh.Trimesh, 
+                                patch_faces: List[int], features: Dict) -> Dict:
+        """计算全局统计特征"""
+        try:
+            # 统计特征
+            mean_curvatures = features.get('mean_curvatures', [])
+            edge_lengths = features.get('edge_lengths', [])
+            
+            # 安全计算统计量
+            if mean_curvatures:
+                mean_curvatures_array = np.array(mean_curvatures)
+                # 过滤异常值
+                valid_curvatures = mean_curvatures_array[np.isfinite(mean_curvatures_array)]
+                
+                avg_curvature = float(np.mean(valid_curvatures)) if len(valid_curvatures) > 0 else 0.0
+                curvature_variance = float(np.var(valid_curvatures)) if len(valid_curvatures) > 0 else 0.0
+            else:
+                avg_curvature = 0.0
+                curvature_variance = 0.0
+            
+            total_boundary_length = float(np.sum(edge_lengths)) if edge_lengths else 0.0
+            
+            # 计算面片面积
+            area = 0.0
+            for face_idx in patch_faces:
+                try:
+                    face = mesh.faces[face_idx]
+                    if len(face) >= 3:
+                        v0, v1, v2 = mesh.vertices[face[:3]]
+                        triangle_area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0))
+                        if np.isfinite(triangle_area) and triangle_area > 0:
+                            area += triangle_area
+                except:
+                    continue
+            
+            return {
+                'avg_curvature': avg_curvature,
+                'curvature_variance': curvature_variance,
+                'total_boundary_length': total_boundary_length,
+                'area': float(area)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"全局特征计算失败: {e}")
+            return {
+                'avg_curvature': 0.0,
+                'curvature_variance': 0.0,
+                'total_boundary_length': 0.0,
+                'area': 0.0
+            }
 
 
 def extract_geometric_features(mesh: trimesh.Trimesh, patch_face_indices: List[int]) -> Optional[Dict]:
     """
-    从网格面片中提取几何特征
+    从网格面片中提取几何特征 - 改进版本
     """
     try:
-        # 获取边界路径
-        boundary_path = mesh.outline(patch_face_indices)
-        if boundary_path is None or len(boundary_path.entities) == 0:
+        # 首先尝试计算边界信息
+        extractor = ImprovedPatchExtractor()
+        boundary_info = extractor._compute_patch_boundary(mesh, patch_face_indices)
+        
+        if boundary_info is None:
+            print("无法计算边界信息，跳过该面片")
             return None
-
-        # 获取边界顶点
-        boundary_entity = boundary_path.entities[0]
-        boundary_vertex_indices = boundary_entity.points
-
-        # 1. 提取顶点位置
-        vertex_positions = mesh.vertices[boundary_vertex_indices].tolist()
-
-        # 2. 提取顶点法线
-        vertex_normals = mesh.vertex_normals[boundary_vertex_indices].tolist()
-
-        # 3. 计算顶点曲率
-        mean_curvatures = []
-        gaussian_curvatures = []
-
-        radius = mesh.scale / 50.0  # 自适应半径
-
-        for vertex_idx in boundary_vertex_indices:
-            mean_curv = trimesh.curvature.discrete_mean_curvature_measure(
-                mesh, mesh.vertices[[vertex_idx]], radius
-            )[0]
-            mean_curvatures.append(float(mean_curv))
-
-            gaussian_curv = trimesh.curvature.discrete_gaussian_curvature_measure(
-                mesh, mesh.vertices[[vertex_idx]], radius
-            )[0]
-            gaussian_curvatures.append(float(gaussian_curv))
-
-        # 4. 计算边长度和边曲率
-        edge_lengths = []
-        edge_curvatures = []
-
-        num_boundary_vertices = len(boundary_vertex_indices)
-        for i in range(num_boundary_vertices):
-            v1_idx = boundary_vertex_indices[i]
-            v2_idx = boundary_vertex_indices[(i + 1) % num_boundary_vertices]
-
-            edge_length = np.linalg.norm(mesh.vertices[v2_idx] - mesh.vertices[v1_idx])
-            edge_lengths.append(float(edge_length))
-
-            edge_curv = (mean_curvatures[i] + mean_curvatures[(i + 1) % num_boundary_vertices]) / 2
-            edge_curvatures.append(float(edge_curv))
-
-        # 5. 计算统计信息
-        avg_curvature = float(np.mean(mean_curvatures))
-        curvature_variance = float(np.var(mean_curvatures))
-        total_boundary_length = float(np.sum(edge_lengths))
-
-        # 6. 计算面片面积
-        patch_faces = mesh.faces[patch_face_indices]
-        area = 0.0
-        for face in patch_faces:
-            v0, v1, v2 = mesh.vertices[face]
-            area += 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0))
-
-        return {
-            'boundary_vertices': vertex_positions,
-            'vertex_normals': vertex_normals,
-            'mean_curvatures': mean_curvatures,
-            'gaussian_curvatures': gaussian_curvatures,
-            'edge_lengths': edge_lengths,
-            'edge_curvatures': edge_curvatures,
-            'avg_curvature': avg_curvature,
-            'curvature_variance': curvature_variance,
-            'total_boundary_length': total_boundary_length,
-            'area': float(area)
-        }
+        
+        # 使用改进的几何特征提取器
+        feature_extractor = ImprovedGeometricFeatureExtractor()
+        geometric_features = feature_extractor.extract_features_robust(
+            mesh, patch_face_indices, boundary_info
+        )
+        
+        return geometric_features
 
     except Exception as e:
         print(f"提取几何特征失败: {e}")
@@ -269,8 +750,17 @@ def main():
                 continue
 
             mesh.merge_vertices()
-            mesh.remove_degenerate_faces()
-            mesh.remove_duplicate_faces()
+            # 使用新的API替代过时的方法
+            try:
+                mesh.update_faces(mesh.nondegenerate_faces())
+                mesh.update_faces(mesh.unique_faces())
+            except AttributeError:
+                # 如果新API不可用，使用旧方法（带警告抑制）
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    mesh.remove_degenerate_faces()
+                    mesh.remove_duplicate_faces()
 
             face_adjacency_graph = nx.from_edgelist(mesh.face_adjacency)
 

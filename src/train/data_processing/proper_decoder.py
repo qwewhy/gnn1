@@ -15,8 +15,8 @@ class EdgebreakerDecoder:
     def decode_pattern_string(self, pattern_string: str, num_boundary_sides: int) -> Optional[Dict]:
         """从Edgebreaker编码重建拓扑图"""
         try:
-            # 1. 解析编码字符串
-            multi_chord_info, edgebreaker_ops = self._parse_pattern_string(pattern_string)
+            # 1. 解析编码字符串，直接处理EdgeBreaker操作
+            edgebreaker_ops = self._parse_edgebreaker_string(pattern_string)
             
             # 2. 初始化边界环
             vertices = list(range(num_boundary_sides))
@@ -29,12 +29,7 @@ class EdgebreakerDecoder:
                 v2 = (i + 1) % num_boundary_sides
                 edges.add(tuple(sorted((v1, v2))))
             
-            # 3. 应用多弦信息重建基础结构
-            vertices, edges, faces = self._apply_multi_chord_unfolding(
-                vertices, edges, faces, multi_chord_info, num_boundary_sides
-            )
-            
-            # 4. 执行Edgebreaker重建
+            # 3. 执行Edgebreaker重建
             graph_data = self._edgebreaker_decode(
                 vertices, edges, faces, edgebreaker_ops, num_boundary_sides
             )
@@ -45,82 +40,39 @@ class EdgebreakerDecoder:
             self.logger.error(f"解码失败 {pattern_string}: {e}")
             return self._create_fallback_graph(num_boundary_sides)
     
-    def _parse_pattern_string(self, pattern_string: str) -> Tuple[List[str], List[str]]:
-        """解析模式字符串"""
+    def _parse_edgebreaker_string(self, pattern_string: str) -> List[str]:
+        """解析EdgeBreaker编码字符串"""
+        # 处理EdgeBreaker操作
         if '#' in pattern_string:
-            multi_chord_part, edgebreaker_part = pattern_string.split('#', 1)
+            _, edgebreaker_part = pattern_string.split('#', 1)
         else:
-            multi_chord_part = ""
             edgebreaker_part = pattern_string
-        
-        # 解析多弦信息
-        multi_chord_info = []
-        if multi_chord_part.strip():
-            multi_chord_info = multi_chord_part.strip().split()
         
         # 解析Edgebreaker操作
         edgebreaker_ops = list(edgebreaker_part.strip())
         
-        return multi_chord_info, edgebreaker_ops
+        return edgebreaker_ops
     
-    def _apply_multi_chord_unfolding(self, vertices: List[int], edges: Set[Tuple[int, int]], 
-                                    faces: List[List[int]], multi_chord_info: List[str],
-                                    num_boundary_sides: int) -> Tuple[List[int], Set[Tuple[int, int]], List[List[int]]]:
-        """应用多弦展开信息"""
-        if not multi_chord_info:
-            return vertices, edges, faces
-            
-        current_boundary = list(range(num_boundary_sides))
-        
-        for chord_count_str in multi_chord_info:
-            try:
-                chord_count = int(chord_count_str)
-                
-                # 对每个弦计数，添加内部结构
-                for _ in range(chord_count):
-                    if len(current_boundary) >= 3:
-                        # 在边界上选择两个非相邻点作为弦的端点
-                        boundary_size = len(current_boundary)
-                        
-                        # 简单策略：连接对角的点
-                        start_idx = 0
-                        end_idx = boundary_size // 2
-                        
-                        start_vertex = current_boundary[start_idx]
-                        end_vertex = current_boundary[end_idx]
-                        
-                        # 添加弦
-                        edges.add(tuple(sorted((start_vertex, end_vertex))))
-                        
-                        # 添加新的内部顶点（可选）
-                        if chord_count > 1:
-                            new_vertex = len(vertices)
-                            vertices.append(new_vertex)
-                            
-                            # 连接新顶点到弦的中点
-                            edges.add(tuple(sorted((new_vertex, start_vertex))))
-                            edges.add(tuple(sorted((new_vertex, end_vertex))))
-                        
-            except ValueError:
-                continue
-                
-        return vertices, edges, faces
+
     
     def _edgebreaker_decode(self, vertices: List[int], edges: Set[Tuple[int, int]], 
                            faces: List[List[int]], edgebreaker_ops: List[str],
                            num_boundary_sides: int) -> Dict:
         """执行Edgebreaker解码"""
+        if not edgebreaker_ops:
+            return self._build_graph_data(vertices, edges, faces, num_boundary_sides)
+            
         active_front = deque(range(num_boundary_sides))  # 当前活跃前沿
         
         for op in edgebreaker_ops:
-            if not active_front:
+            if not active_front or len(active_front) < 2:
                 break
                 
             if op == 'S':  # Start - 开始三角剖分
                 if len(active_front) >= 3:
                     v1 = active_front.popleft()
                     v2 = active_front.popleft()
-                    v3 = active_front[0]
+                    v3 = active_front[0] if active_front else v1
                     
                     # 添加三角形
                     faces.append([v1, v2, v3])
@@ -129,53 +81,50 @@ class EdgebreakerDecoder:
                     edges.add(tuple(sorted((v3, v1))))
                     
             elif op == 'C':  # Case - 添加新顶点
-                if len(active_front) >= 2:
-                    v1 = active_front.popleft()
-                    v2 = active_front[0]
-                    
-                    # 创建新顶点
-                    new_vertex = len(vertices)
-                    vertices.append(new_vertex)
-                    
-                    # 添加三角形
-                    faces.append([v1, v2, new_vertex])
-                    edges.add(tuple(sorted((v1, v2))))
-                    edges.add(tuple(sorted((v2, new_vertex))))
-                    edges.add(tuple(sorted((new_vertex, v1))))
-                    
-                    # 更新活跃前沿
-                    active_front.appendleft(new_vertex)
-                    
+                v1 = active_front.popleft()
+                v2 = active_front[0] if active_front else v1
+                
+                # 创建新顶点
+                new_vertex = len(vertices)
+                vertices.append(new_vertex)
+                
+                # 添加三角形
+                faces.append([v1, v2, new_vertex])
+                edges.add(tuple(sorted((v1, v2))))
+                edges.add(tuple(sorted((v2, new_vertex))))
+                edges.add(tuple(sorted((new_vertex, v1))))
+                
+                # 更新活跃前沿
+                active_front.appendleft(new_vertex)
+                
             elif op == 'L':  # Left - 左扩展
-                if len(active_front) >= 2:
-                    v1 = active_front[0]
-                    v2 = active_front[1]
-                    
-                    new_vertex = len(vertices)
-                    vertices.append(new_vertex)
-                    
-                    faces.append([v1, v2, new_vertex])
-                    edges.add(tuple(sorted((v1, v2))))
-                    edges.add(tuple(sorted((v2, new_vertex))))
-                    edges.add(tuple(sorted((new_vertex, v1))))
-                    
-                    active_front.appendleft(new_vertex)
-                    
+                v1 = active_front[0] if len(active_front) > 0 else 0
+                v2 = active_front[1] if len(active_front) > 1 else v1
+                
+                new_vertex = len(vertices)
+                vertices.append(new_vertex)
+                
+                faces.append([v1, v2, new_vertex])
+                edges.add(tuple(sorted((v1, v2))))
+                edges.add(tuple(sorted((v2, new_vertex))))
+                edges.add(tuple(sorted((new_vertex, v1))))
+                
+                active_front.appendleft(new_vertex)
+                
             elif op == 'R':  # Right - 右扩展
-                if len(active_front) >= 2:
-                    v1 = active_front[-2]
-                    v2 = active_front[-1]
-                    
-                    new_vertex = len(vertices)
-                    vertices.append(new_vertex)
-                    
-                    faces.append([v1, v2, new_vertex])
-                    edges.add(tuple(sorted((v1, v2))))
-                    edges.add(tuple(sorted((v2, new_vertex))))
-                    edges.add(tuple(sorted((new_vertex, v1))))
-                    
-                    active_front.append(new_vertex)
-                    
+                v1 = active_front[-2] if len(active_front) > 1 else 0
+                v2 = active_front[-1] if len(active_front) > 0 else 0
+                
+                new_vertex = len(vertices)
+                vertices.append(new_vertex)
+                
+                faces.append([v1, v2, new_vertex])
+                edges.add(tuple(sorted((v1, v2))))
+                edges.add(tuple(sorted((v2, new_vertex))))
+                edges.add(tuple(sorted((new_vertex, v1))))
+                
+                active_front.append(new_vertex)
+                
             elif op == 'E':  # End - 结束
                 break
         
@@ -377,7 +326,7 @@ class EdgebreakerDecoder:
         }
 
 class ProperPatternParser:
-    """正确的模式解析器"""
+    """模式解析器"""
     def __init__(self, pattern_string: str, sides: int):
         self.pattern_string = pattern_string
         self.sides = sides

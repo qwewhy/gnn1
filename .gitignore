@@ -40,3 +40,4 @@ wheels/
 .Trashes
 ehthumbs.db
 Thumbs.db
+data/raw/patches.db
