@@ -11,7 +11,7 @@ import numpy as np
 
 # 使用集中的路径管理器
 from src.common.path_manager import path_manager
-from src.train.data_processing.proper_decoder import ProperPatternParser
+from src.train.data_processing.encoding.topology.pattern_decoder import ProperPatternParser
 
 
 class PatchDataset(InMemoryDataset):

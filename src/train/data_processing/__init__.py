@@ -1,22 +1,19 @@
 """
-数据处理模块 - 完整实现版本（含几何特征提取）
-Data processing module - Complete implementation with geometric feature extraction
+数据处理模块 - 重构版本（遵循单一职责原则）
+Data processing module - Refactored version (following Single Responsibility Principle)
 """
 
-# 导入核心编码/解码器
-# 直接使用基础实现（已经足够完整）
-from .proper_encoder import ProperPatternEncoder
-from .proper_decoder import ProperPatternParser
-
-print("使用基础编码/解码器实现")
-
-# 导入增强的数据库操作（包含几何特征提取）
-from .populate_db import (
-    setup_database,
-    extract_random_patch,
-    encode_patch_to_pattern,
-    extract_geometric_features  # 新增：几何特征提取
+# 导入重构后的模块
+from .database import setup_database
+from .mesh_processing import MeshLoader, ImprovedPatchExtractor, extract_random_patch, PatchValidator
+from .encoding import (
+    EdgeBreakerEncoder, EdgebreakerDecoder,
+    ProperPatternEncoder, ProperPatternParser,
+    ImprovedGeometricFeatureExtractor, extract_geometric_features
 )
+from .orchestration import PatchProcessor, DatabasePopulator
+
+print("使用重构后的模块化实现")
 
 # 有条件导入PyG相关模块
 try:
@@ -31,15 +28,26 @@ except ImportError as e:
     TripletGenerator = None
 
 __all__ = [
-    # 核心编码/解码
+    # 数据库模块
+    'setup_database',
+    
+    # 网格处理模块
+    'MeshLoader',
+    'ImprovedPatchExtractor',
+    'extract_random_patch',
+    'PatchValidator',
+    
+    # 编码模块
+    'EdgeBreakerEncoder',
+    'EdgebreakerDecoder', 
     'ProperPatternEncoder',
     'ProperPatternParser',
-
-    # 数据库操作（增强版）
-    'setup_database',
-    'extract_random_patch',
-    'encode_patch_to_pattern',
-    'extract_geometric_features',  # 新增导出
+    'ImprovedGeometricFeatureExtractor',
+    'extract_geometric_features',
+    
+    # 协调模块
+    'PatchProcessor',
+    'DatabasePopulator',
 ]
 
 # 有条件添加PyG模块
@@ -50,8 +58,8 @@ if _HAS_TORCH_GEOMETRIC:
     ])
 
 # 版本信息
-__version__ = "1.1.0"  # 升级版本号
-__status__ = "Production with Geometry" if _HAS_TORCH_GEOMETRIC else "Limited"
+__version__ = "2.0.0"  # 重构版本号
+__status__ = "Refactored with SOLID Principles" if _HAS_TORCH_GEOMETRIC else "Refactored Limited"
 
 
 def verify_dependencies():
